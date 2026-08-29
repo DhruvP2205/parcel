@@ -1,0 +1,22 @@
+package transfer
+
+import "time"
+
+// The three timeout tiers referenced throughout the design: how long a
+// generated code waits to be claimed, how long a handshake gets to
+// complete once two peers are connected, and how long the connection may
+// go silent mid-transfer before it's treated as dropped.
+const (
+	CodeClaimTimeout = 2 * time.Minute
+	HandshakeTimeout = 20 * time.Second
+	StallTimeout     = 45 * time.Second
+
+	// SessionWindow is how long a single generated code remains usable
+	// end-to-end, including reconnect-and-resume attempts after a drop.
+	// This folds the "separate resume token" idea from the design notes
+	// into something simpler: the code itself stays valid for a bounded
+	// window rather than being strictly single-shot, which is enough to
+	// support resuming a dropped transfer without adding a second secret
+	// to manage. See STDLIB.md / README for the reasoning.
+	SessionWindow = 5 * time.Minute
+)
