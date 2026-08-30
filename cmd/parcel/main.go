@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/signal"
 	"time"
 
 	"parcel/internal/codeword"
@@ -23,22 +24,39 @@ const usage = `parcel — zero-dependency encrypted P2P file transfer
 Usage:
   parcel send <path> [flags]
   parcel receive <code> [flags]
+  parcel relay [flags]
 
 path may be a single file or a directory (sent as an archive and
 unpacked back into a directory on the receiving end).
 
-Send flags:
+parcel always tries a direct local-network connection first. If that
+doesn't find a peer within a few seconds and a relay server is configured
+(-relay, or the PARCEL_RELAY environment variable), it falls back to
+relaying encrypted bytes through that server — useful when the two
+machines aren't on the same network. The relay never sees file content:
+every byte it forwards is already end-to-end encrypted before it arrives.
+
+Send/receive flags:
   -lan-only       only attempt local-network discovery, never contact a relay
-  -relay-only     skip direct/LAN attempts, always use the relay (not yet implemented)
+  -relay-only     skip the local-network attempt, always use the relay
+  -relay <addr>   relay server address, e.g. relay.example.com:4321
+                  (also read from PARCEL_RELAY)
+
+Send-only flags:
   -no-compress    disable flate compression of the transferred stream
 
-Receive flags:
+Receive-only flags:
   -out <dir>      directory to write the received file/folder into (default ".")
+
+Relay flags:
+  -addr <addr>    address to listen on (default ":4321")
 
 Examples:
   parcel send ./photo.jpg
   parcel send ./my-project-folder
   parcel receive crimson-otter-lagoon
+  parcel send ./photo.jpg -relay relay.example.com:4321
+  parcel relay -addr :4321
 `
 
 // exit codes
@@ -63,6 +81,8 @@ func run(args []string) int {
 		return runSend(args[1:])
 	case "receive":
 		return runReceive(args[1:])
+	case "relay":
+		return runRelay(args[1:])
 	case "-h", "--help", "help":
 		fmt.Fprint(os.Stdout, usage)
 		return exitOK
@@ -76,7 +96,8 @@ func run(args []string) int {
 func runSend(args []string) int {
 	fs := flag.NewFlagSet("send", flag.ContinueOnError)
 	lanOnly := fs.Bool("lan-only", false, "only attempt local-network discovery")
-	relayOnly := fs.Bool("relay-only", false, "always use the relay, skip direct/LAN attempts")
+	relayOnly := fs.Bool("relay-only", false, "skip the local-network attempt, always use the relay")
+	relayAddr := fs.String("relay", os.Getenv("PARCEL_RELAY"), "relay server address to fall back to (also read from PARCEL_RELAY)")
 	noCompress := fs.Bool("no-compress", false, "disable compression")
 	fs.SetOutput(os.Stderr)
 	if err := fs.Parse(args); err != nil {
@@ -96,9 +117,9 @@ func runSend(args []string) int {
 		fmt.Fprintln(os.Stderr, "parcel send: -lan-only and -relay-only are mutually exclusive")
 		return exitUsage
 	}
-	if *relayOnly {
-		fmt.Fprintln(os.Stderr, "parcel send: -relay-only is not implemented yet (relay/rendezvous ships in a later milestone)")
-		return exitRuntime
+	if *relayOnly && *relayAddr == "" {
+		fmt.Fprintln(os.Stderr, "parcel send: -relay-only requires -relay <addr> (or PARCEL_RELAY)")
+		return exitUsage
 	}
 
 	prepared, err := source.Prepare(path, !*noCompress)
@@ -119,38 +140,41 @@ func runSend(args []string) int {
 		return exitRuntime
 	}
 
-	ln, err := net.Listen("tcp", ":0")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "parcel send: listen: %v\n", err)
-		return exitRuntime
+	ctx, cancel := context.WithTimeout(context.Background(), transfer.SessionWindow)
+	defer cancel()
+
+	var ln net.Listener
+	if !*relayOnly {
+		ln, err = net.Listen("tcp", ":0")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "parcel send: listen: %v\n", err)
+			return exitRuntime
+		}
+		defer ln.Close()
+		tcpPort := ln.Addr().(*net.TCPAddr).Port
+
+		go func() {
+			if err := discovery.Announce(ctx, code, tcpPort); err != nil && ctx.Err() == nil {
+				fmt.Fprintf(os.Stderr, "parcel send: LAN announce stopped early: %v\n", err)
+			}
+		}()
+		go func() {
+			<-ctx.Done()
+			ln.Close()
+		}()
 	}
-	defer ln.Close()
-	tcpPort := ln.Addr().(*net.TCPAddr).Port
 
 	fmt.Printf("Your code: %s\n", code)
 	fmt.Printf("Share it with the receiver — valid for %s. Waiting for them to connect...\n", transfer.SessionWindow)
 
-	ctx, cancel := context.WithTimeout(context.Background(), transfer.SessionWindow)
-	defer cancel()
-
-	go func() {
-		if err := discovery.Announce(ctx, code, tcpPort); err != nil && ctx.Err() == nil {
-			fmt.Fprintf(os.Stderr, "parcel send: LAN announce stopped early: %v\n", err)
-		}
-	}()
-	go func() {
-		<-ctx.Done()
-		ln.Close()
-	}()
-
 	for {
-		conn, err := ln.Accept()
+		conn, err := acceptSendConn(ctx, ln, *relayOnly, *lanOnly, *relayAddr, code)
 		if err != nil {
 			if ctx.Err() != nil {
 				fmt.Fprintln(os.Stderr, "parcel send: timed out waiting for a receiver")
 				return exitRuntime
 			}
-			fmt.Fprintf(os.Stderr, "parcel send: accept: %v\n", err)
+			fmt.Fprintf(os.Stderr, "parcel send: %v\n", err)
 			return exitRuntime
 		}
 
@@ -177,6 +201,9 @@ func runSend(args []string) int {
 func runReceive(args []string) int {
 	fs := flag.NewFlagSet("receive", flag.ContinueOnError)
 	out := fs.String("out", ".", "directory to write the received file/folder into")
+	lanOnly := fs.Bool("lan-only", false, "only attempt local-network discovery")
+	relayOnly := fs.Bool("relay-only", false, "skip the local-network attempt, always use the relay")
+	relayAddr := fs.String("relay", os.Getenv("PARCEL_RELAY"), "relay server address to fall back to (also read from PARCEL_RELAY)")
 	fs.SetOutput(os.Stderr)
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -191,6 +218,14 @@ func runReceive(args []string) int {
 		fmt.Fprintf(os.Stderr, "parcel receive: %q doesn't look like a valid code: %v\n", code, err)
 		return exitUsage
 	}
+	if *lanOnly && *relayOnly {
+		fmt.Fprintln(os.Stderr, "parcel receive: -lan-only and -relay-only are mutually exclusive")
+		return exitUsage
+	}
+	if *relayOnly && *relayAddr == "" {
+		fmt.Fprintln(os.Stderr, "parcel receive: -relay-only requires -relay <addr> (or PARCEL_RELAY)")
+		return exitUsage
+	}
 
 	deadline := time.Now().Add(transfer.SessionWindow)
 	backoff := time.Second
@@ -203,29 +238,18 @@ func runReceive(args []string) int {
 			return exitRuntime
 		}
 
-		discoverCtx, cancel := context.WithTimeout(context.Background(), min(remaining, transfer.CodeClaimTimeout))
-		ip, port, err := discovery.Discover(discoverCtx, code)
+		connectCtx, cancel := context.WithTimeout(context.Background(), remaining)
+		conn, err := connectReceive(connectCtx, code, *lanOnly, *relayOnly, *relayAddr)
 		cancel()
 		if err != nil {
-			if errors.Is(err, discovery.ErrNoPeerFound) {
-				fmt.Fprintln(os.Stderr, "parcel receive: no sender found on the local network with that code")
-				return exitRuntime
-			}
-			fmt.Fprintf(os.Stderr, "parcel receive: discovery: %v\n", err)
-			return exitRuntime
-		}
-
-		addr := &net.TCPAddr{IP: ip, Port: port}
-		conn, err := net.DialTCP("tcp", nil, addr)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "parcel receive: connect to %v: %v\n", addr, err)
+			fmt.Fprintf(os.Stderr, "parcel receive: %v\n", err)
 			return exitRuntime
 		}
 
 		if attempt == 1 {
-			fmt.Printf("Found sender at %v, connecting...\n", addr)
+			fmt.Printf("Connected to %v, receiving...\n", conn.RemoteAddr())
 		} else {
-			fmt.Printf("Reconnected to %v, resuming...\n", addr)
+			fmt.Printf("Reconnected to %v, resuming...\n", conn.RemoteAddr())
 		}
 
 		err = transfer.Receive(conn, code, *out)
@@ -245,5 +269,186 @@ func runReceive(args []string) int {
 		}
 		fmt.Fprintf(os.Stderr, "parcel receive: %v\n", err)
 		return exitRuntime
+	}
+}
+
+func runRelay(args []string) int {
+	fs := flag.NewFlagSet("relay", flag.ContinueOnError)
+	addr := fs.String("addr", ":4321", "address to listen on for relay connections")
+	fs.SetOutput(os.Stderr)
+	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintln(os.Stderr, "parcel relay: unexpected arguments")
+		return exitUsage
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	fmt.Printf("Relay listening on %s — forwards encrypted bytes only, never sees file content. Ctrl+C to stop.\n", *addr)
+	if err := discovery.RunRelay(ctx, *addr); err != nil {
+		fmt.Fprintf(os.Stderr, "parcel relay: %v\n", err)
+		return exitRuntime
+	}
+	return exitOK
+}
+
+// acceptSendConn waits for one incoming connection: on the local network
+// (via ln, which Announce is advertising on), or through a relay, or both
+// racing — whichever produces a peer first wins. See connectReceive for
+// the receiving side of the same strategy.
+func acceptSendConn(ctx context.Context, ln net.Listener, relayOnly, lanOnly bool, relayAddr, code string) (net.Conn, error) {
+	if relayOnly {
+		return discovery.DialRelay(ctx, relayAddr, code, discovery.RoleSender)
+	}
+
+	lanCh, lanErrCh := make(chan net.Conn, 1), make(chan error, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			lanErrCh <- err
+			return
+		}
+		lanCh <- conn
+	}()
+
+	if lanOnly || relayAddr == "" {
+		select {
+		case conn := <-lanCh:
+			return conn, nil
+		case err := <-lanErrCh:
+			return nil, err
+		}
+	}
+
+	select {
+	case conn := <-lanCh:
+		return conn, nil
+	case <-lanErrCh: // listener closed (likely ctx expiring) — let the relay race below decide
+	case <-time.After(transfer.LANDiscoveryTimeout):
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+
+	relayCh, relayErrCh := make(chan net.Conn, 1), make(chan error, 1)
+	go func() {
+		conn, err := discovery.DialRelay(ctx, relayAddr, code, discovery.RoleSender)
+		if err != nil {
+			relayErrCh <- err
+			return
+		}
+		relayCh <- conn
+	}()
+
+	select {
+	case conn := <-lanCh:
+		go closeWhenReady(relayCh)
+		return conn, nil
+	case conn := <-relayCh:
+		go closeWhenReady(lanCh)
+		return conn, nil
+	case relayErr := <-relayErrCh:
+		select {
+		case conn := <-lanCh:
+			return conn, nil
+		case lanErr := <-lanErrCh:
+			return nil, fmt.Errorf("both local-network and relay attempts failed: lan=%v relay=%v", lanErr, relayErr)
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// connectReceive is the receiving side of acceptSendConn's race: it tries
+// LAN discovery first, then falls back to a relay if configured and LAN
+// hasn't produced a peer within transfer.LANDiscoveryTimeout.
+func connectReceive(ctx context.Context, code string, lanOnly, relayOnly bool, relayAddr string) (net.Conn, error) {
+	if relayOnly {
+		return discovery.DialRelay(ctx, relayAddr, code, discovery.RoleReceiver)
+	}
+
+	lanCh, lanErrCh := make(chan net.Conn, 1), make(chan error, 1)
+	go func() {
+		conn, err := dialLAN(ctx, code)
+		if err != nil {
+			lanErrCh <- err
+			return
+		}
+		lanCh <- conn
+	}()
+
+	if lanOnly || relayAddr == "" {
+		select {
+		case conn := <-lanCh:
+			return conn, nil
+		case err := <-lanErrCh:
+			return nil, err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+
+	select {
+	case conn := <-lanCh:
+		return conn, nil
+	case <-lanErrCh:
+	case <-time.After(transfer.LANDiscoveryTimeout):
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+
+	relayCh, relayErrCh := make(chan net.Conn, 1), make(chan error, 1)
+	go func() {
+		conn, err := discovery.DialRelay(ctx, relayAddr, code, discovery.RoleReceiver)
+		if err != nil {
+			relayErrCh <- err
+			return
+		}
+		relayCh <- conn
+	}()
+
+	select {
+	case conn := <-lanCh:
+		go closeWhenReady(relayCh)
+		return conn, nil
+	case conn := <-relayCh:
+		go closeWhenReady(lanCh)
+		return conn, nil
+	case relayErr := <-relayErrCh:
+		select {
+		case conn := <-lanCh:
+			return conn, nil
+		case lanErr := <-lanErrCh:
+			return nil, fmt.Errorf("both local-network and relay attempts failed: lan=%v relay=%v", lanErr, relayErr)
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func dialLAN(ctx context.Context, code string) (net.Conn, error) {
+	ip, port, err := discovery.Discover(ctx, code)
+	if err != nil {
+		return nil, err
+	}
+	var d net.Dialer
+	return d.DialContext(ctx, "tcp", (&net.TCPAddr{IP: ip, Port: port}).String())
+}
+
+// closeWhenReady closes whichever connection eventually arrives on ch —
+// used to clean up the losing side of an accept/dial race so it doesn't
+// sit paired-but-unused. Gives up after a bounded wait rather than
+// blocking forever if the loser never arrives.
+func closeWhenReady(ch <-chan net.Conn) {
+	select {
+	case conn := <-ch:
+		conn.Close()
+	case <-time.After(30 * time.Second):
 	}
 }

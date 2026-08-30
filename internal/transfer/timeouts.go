@@ -19,4 +19,11 @@ const (
 	// support resuming a dropped transfer without adding a second secret
 	// to manage. See STDLIB.md / README for the reasoning.
 	SessionWindow = 5 * time.Minute
+
+	// LANDiscoveryTimeout bounds how long the CLI waits for a same-network
+	// peer before falling back to a configured relay server. Direct LAN
+	// transfer is always preferred (lower latency, no third-party server
+	// in the path), but a real user shouldn't have to sit through the
+	// full SessionWindow before an internet-relay fallback kicks in.
+	LANDiscoveryTimeout = 15 * time.Second
 )
