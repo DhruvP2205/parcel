@@ -229,7 +229,13 @@ func runReceive(args []string) int {
 		fmt.Fprintln(os.Stderr, "parcel receive: expected exactly one <code> argument")
 		return exitUsage
 	}
-	code := fs.Arg(0)
+	// QR's Alphanumeric mode (internal/qr) can only encode uppercase
+	// letters, so a scanned code comes back shouted (ISO/IEC 18004's
+	// Alphanumeric charset has no lowercase). Normalize here so a scanned
+	// code and a typed one are byte-identical from this point on —
+	// otherwise Validate, LAN discovery, and the handshake all fail on a
+	// scan that's actually correct.
+	code := strings.ToLower(fs.Arg(0))
 
 	if err := codeword.Validate(code); err != nil {
 		fmt.Fprintf(os.Stderr, "parcel receive: %q doesn't look like a valid code: %v\n", code, err)
