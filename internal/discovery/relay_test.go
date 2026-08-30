@@ -34,11 +34,11 @@ func TestRelayPairsSenderAndReceiverAndForwardsBytesBothWays(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		senderConn, senderErr = DialRelay(ctx, addr, "test-code-1", RoleSender)
+		senderConn, _, senderErr = DialRelay(ctx, addr, "test-code-1", RoleSender, 0)
 	}()
 	go func() {
 		defer wg.Done()
-		receiverConn, receiverErr = DialRelay(ctx, addr, "test-code-1", RoleReceiver)
+		receiverConn, _, receiverErr = DialRelay(ctx, addr, "test-code-1", RoleReceiver, 0)
 	}()
 	wg.Wait()
 	if senderErr != nil {
@@ -84,7 +84,7 @@ func TestRelayRejectsDuplicateRoleForSameCode(t *testing.T) {
 	defer firstCancel()
 	firstDone := make(chan struct{})
 	go func() {
-		DialRelay(firstCtx, addr, "dup-code", RoleSender)
+		DialRelay(firstCtx, addr, "dup-code", RoleSender, 0)
 		close(firstDone)
 	}()
 
@@ -97,7 +97,7 @@ func TestRelayRejectsDuplicateRoleForSameCode(t *testing.T) {
 	// queued or allowed to replace the first.
 	shortCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	_, err := DialRelay(shortCtx, addr, "dup-code", RoleSender)
+	_, _, err := DialRelay(shortCtx, addr, "dup-code", RoleSender, 0)
 	if err != ErrRelayRejected {
 		t.Errorf("expected ErrRelayRejected, got %v", err)
 	}
@@ -112,11 +112,11 @@ func TestRelayDoesNotCrossPairDifferentCodes(t *testing.T) {
 
 	errCh := make(chan error, 2)
 	go func() {
-		_, err := DialRelay(ctx, addr, "code-a", RoleSender)
+		_, _, err := DialRelay(ctx, addr, "code-a", RoleSender, 0)
 		errCh <- err
 	}()
 	go func() {
-		_, err := DialRelay(ctx, addr, "code-b", RoleReceiver)
+		_, _, err := DialRelay(ctx, addr, "code-b", RoleReceiver, 0)
 		errCh <- err
 	}()
 

@@ -57,14 +57,14 @@ func ServeRelay(ctx context.Context, ln net.Listener) error {
 
 func handleRelayConn(ctx context.Context, conn net.Conn, room *relayRoom) {
 	conn.SetDeadline(time.Now().Add(relayHelloTimeout))
-	role, code, err := readRelayHello(conn)
+	role, code, punchPort, err := readRelayHello(conn)
 	if err != nil {
 		conn.Close()
 		return
 	}
 	conn.SetDeadline(time.Time{})
 
-	peer, iAmMatcher, err := room.pairOrWait(ctx, code, role, conn)
+	match, iAmMatcher, err := room.pairOrWait(ctx, code, role, conn, punchPort)
 	if err != nil {
 		writeRelayStatus(conn, relayStatusReject)
 		conn.Close()
@@ -73,13 +73,16 @@ func handleRelayConn(ctx context.Context, conn net.Conn, room *relayRoom) {
 	if !iAmMatcher {
 		// This goroutine registered and waited; the goroutine that matched
 		// us owns both connections now (it received our conn as its peer)
-		// and is responsible for status + splicing. Nothing left to do
-		// here — importantly, do not touch or close conn.
+		// and is responsible for status + peer-info + splicing. Nothing
+		// left to do here — importantly, do not touch or close conn.
 		return
 	}
 
+	peer := match.conn
 	writeRelayStatus(conn, relayStatusPaired)
 	writeRelayStatus(peer, relayStatusPaired)
+	writePeerInfo(conn, PeerInfo{IP: hostIP(peer.RemoteAddr()), PunchPort: match.punchPort})
+	writePeerInfo(peer, PeerInfo{IP: hostIP(conn.RemoteAddr()), PunchPort: punchPort})
 	splice(conn, peer)
 }
 
@@ -95,12 +98,14 @@ func splice(a, b net.Conn) {
 }
 
 type relayMatch struct {
-	conn net.Conn
+	conn      net.Conn
+	punchPort int
 }
 
 type waitingPeer struct {
-	conn    net.Conn
-	matched chan relayMatch
+	conn      net.Conn
+	punchPort int
+	matched   chan relayMatch
 }
 
 // relayRoom pairs a sender and receiver that register with the same code.
@@ -124,7 +129,7 @@ func roomKey(code string, role RelayRole) string {
 // complementary peer (returning iAmMatcher=true, so the caller drives
 // splicing), or registers conn as the waiter and blocks until someone
 // pairs with it (iAmMatcher=false) or it times out.
-func (r *relayRoom) pairOrWait(ctx context.Context, code string, role RelayRole, conn net.Conn) (peer net.Conn, iAmMatcher bool, err error) {
+func (r *relayRoom) pairOrWait(ctx context.Context, code string, role RelayRole, conn net.Conn, punchPort int) (match relayMatch, iAmMatcher bool, err error) {
 	otherRole := RoleReceiver
 	if role == RoleReceiver {
 		otherRole = RoleSender
@@ -135,42 +140,42 @@ func (r *relayRoom) pairOrWait(ctx context.Context, code string, role RelayRole,
 	r.mu.Lock()
 	if other, ok := r.waiting[otherKey]; ok {
 		delete(r.waiting, otherKey)
-		other.matched <- relayMatch{conn: conn} // buffered(1): never blocks
+		other.matched <- relayMatch{conn: conn, punchPort: punchPort} // buffered(1): never blocks
 		r.mu.Unlock()
-		return other.conn, true, nil
+		return relayMatch{conn: other.conn, punchPort: other.punchPort}, true, nil
 	}
 	if _, exists := r.waiting[myKey]; exists {
 		r.mu.Unlock()
-		return nil, false, ErrRelayRejected
+		return relayMatch{}, false, ErrRelayRejected
 	}
-	me := &waitingPeer{conn: conn, matched: make(chan relayMatch, 1)}
+	me := &waitingPeer{conn: conn, punchPort: punchPort, matched: make(chan relayMatch, 1)}
 	r.waiting[myKey] = me
 	r.mu.Unlock()
 
 	select {
 	case m := <-me.matched:
-		return m.conn, false, nil
+		return m, false, nil
 	case <-time.After(relayWaitTimeout):
 		r.mu.Lock()
 		if r.waiting[myKey] == me {
 			delete(r.waiting, myKey)
 			r.mu.Unlock()
-			return nil, false, fmt.Errorf("discovery: relay wait timed out for code")
+			return relayMatch{}, false, fmt.Errorf("discovery: relay wait timed out for code")
 		}
 		r.mu.Unlock()
 		// A matcher grabbed us right at the deadline and already sent
 		// under the lock above — the value is guaranteed to be there.
 		m := <-me.matched
-		return m.conn, false, nil
+		return m, false, nil
 	case <-ctx.Done():
 		r.mu.Lock()
 		if r.waiting[myKey] == me {
 			delete(r.waiting, myKey)
 			r.mu.Unlock()
-			return nil, false, ctx.Err()
+			return relayMatch{}, false, ctx.Err()
 		}
 		r.mu.Unlock()
 		m := <-me.matched
-		return m.conn, false, nil
+		return m, false, nil
 	}
 }

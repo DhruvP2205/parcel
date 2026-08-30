@@ -26,4 +26,11 @@ const (
 	// in the path), but a real user shouldn't have to sit through the
 	// full SessionWindow before an internet-relay fallback kicks in.
 	LANDiscoveryTimeout = 15 * time.Second
+
+	// PunchTimeout bounds the extra time spent trying to upgrade an
+	// already-working relay connection to a direct NAT-punched one. This
+	// is pure upside-seeking: the relay connection is already in hand by
+	// the time punching starts, so a short budget here just avoids
+	// stalling a transfer that would otherwise start immediately.
+	PunchTimeout = 4 * time.Second
 )

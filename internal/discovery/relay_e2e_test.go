@@ -34,11 +34,11 @@ func TestFileTransferThroughRelay(t *testing.T) {
 	var senderErr, receiverErr error
 	done := make(chan struct{}, 2)
 	go func() {
-		senderConn, senderErr = DialRelay(ctx, addr, "relay-transfer-code", RoleSender)
+		senderConn, _, senderErr = DialRelay(ctx, addr, "relay-transfer-code", RoleSender, 0)
 		done <- struct{}{}
 	}()
 	go func() {
-		receiverConn, receiverErr = DialRelay(ctx, addr, "relay-transfer-code", RoleReceiver)
+		receiverConn, _, receiverErr = DialRelay(ctx, addr, "relay-transfer-code", RoleReceiver, 0)
 		done <- struct{}{}
 	}()
 	<-done

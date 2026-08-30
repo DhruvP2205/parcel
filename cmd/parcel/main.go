@@ -31,10 +31,13 @@ unpacked back into a directory on the receiving end).
 
 parcel always tries a direct local-network connection first. If that
 doesn't find a peer within a few seconds and a relay server is configured
-(-relay, or the PARCEL_RELAY environment variable), it falls back to
-relaying encrypted bytes through that server — useful when the two
-machines aren't on the same network. The relay never sees file content:
-every byte it forwards is already end-to-end encrypted before it arrives.
+(-relay, or the PARCEL_RELAY environment variable), it falls back to that
+relay — useful when the two machines aren't on the same network. Once
+paired through the relay, both sides also try a brief direct-connection
+upgrade (NAT hole punching) before settling for relayed traffic; this is
+best-effort and depends on the network's NAT behavior, not guaranteed. The
+relay never sees file content either way: every byte it forwards is
+already end-to-end encrypted before it arrives.
 
 Send/receive flags:
   -lan-only       only attempt local-network discovery, never contact a relay
@@ -301,7 +304,7 @@ func runRelay(args []string) int {
 // the receiving side of the same strategy.
 func acceptSendConn(ctx context.Context, ln net.Listener, relayOnly, lanOnly bool, relayAddr, code string) (net.Conn, error) {
 	if relayOnly {
-		return discovery.DialRelay(ctx, relayAddr, code, discovery.RoleSender)
+		return connectViaRelayOrPunch(ctx, relayAddr, code, discovery.RoleSender)
 	}
 
 	lanCh, lanErrCh := make(chan net.Conn, 1), make(chan error, 1)
@@ -334,7 +337,7 @@ func acceptSendConn(ctx context.Context, ln net.Listener, relayOnly, lanOnly boo
 
 	relayCh, relayErrCh := make(chan net.Conn, 1), make(chan error, 1)
 	go func() {
-		conn, err := discovery.DialRelay(ctx, relayAddr, code, discovery.RoleSender)
+		conn, err := connectViaRelayOrPunch(ctx, relayAddr, code, discovery.RoleSender)
 		if err != nil {
 			relayErrCh <- err
 			return
@@ -368,7 +371,7 @@ func acceptSendConn(ctx context.Context, ln net.Listener, relayOnly, lanOnly boo
 // hasn't produced a peer within transfer.LANDiscoveryTimeout.
 func connectReceive(ctx context.Context, code string, lanOnly, relayOnly bool, relayAddr string) (net.Conn, error) {
 	if relayOnly {
-		return discovery.DialRelay(ctx, relayAddr, code, discovery.RoleReceiver)
+		return connectViaRelayOrPunch(ctx, relayAddr, code, discovery.RoleReceiver)
 	}
 
 	lanCh, lanErrCh := make(chan net.Conn, 1), make(chan error, 1)
@@ -403,7 +406,7 @@ func connectReceive(ctx context.Context, code string, lanOnly, relayOnly bool, r
 
 	relayCh, relayErrCh := make(chan net.Conn, 1), make(chan error, 1)
 	go func() {
-		conn, err := discovery.DialRelay(ctx, relayAddr, code, discovery.RoleReceiver)
+		conn, err := connectViaRelayOrPunch(ctx, relayAddr, code, discovery.RoleReceiver)
 		if err != nil {
 			relayErrCh <- err
 			return
@@ -430,6 +433,42 @@ func connectReceive(ctx context.Context, code string, lanOnly, relayOnly bool, r
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+// connectViaRelayOrPunch pairs through the relay (the guaranteed path,
+// exactly like M4) and then spends a short bounded window trying to
+// upgrade to a direct NAT-punched connection using the peer address the
+// relay's pairing handshake revealed. If punching succeeds, the relay
+// connection — no longer needed — is closed and the direct one is used
+// instead; if it fails or times out, the already-open relay connection is
+// used as-is. Either way the caller gets exactly one connection back.
+func connectViaRelayOrPunch(ctx context.Context, relayAddr, code string, role discovery.RelayRole) (net.Conn, error) {
+	punchLn, lnErr := net.Listen("tcp", ":0")
+	punchPort := 0
+	if lnErr == nil {
+		punchPort = punchLn.Addr().(*net.TCPAddr).Port
+	}
+
+	relayConn, peer, err := discovery.DialRelay(ctx, relayAddr, code, role, punchPort)
+	if err != nil {
+		if punchLn != nil {
+			punchLn.Close()
+		}
+		return nil, err
+	}
+	if punchLn == nil || peer.PunchPort == 0 {
+		return relayConn, nil
+	}
+
+	punchCtx, cancel := context.WithTimeout(ctx, transfer.PunchTimeout)
+	direct, punchErr := discovery.PunchDirect(punchCtx, role, punchLn, peer)
+	cancel()
+	punchLn.Close()
+	if punchErr != nil {
+		return relayConn, nil
+	}
+	relayConn.Close()
+	return direct, nil
 }
 
 func dialLAN(ctx context.Context, code string) (net.Conn, error) {
