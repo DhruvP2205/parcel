@@ -148,14 +148,21 @@ own idiom), not a separate `tests/` tree — every `internal/*` package and
 
 ## Limits (read before a demo)
 
-- **LAN discovery is implemented per the Go stdlib multicast docs and unit-
-  tested at the protocol level, but wasn't end-to-end verified on a real
-  LAN in this project's development environment** — the dev machine's
-  firewall silently drops the inbound multicast join for unapproved
-  binaries, with no admin rights available in that sandbox to add an
-  exception. The test suite detects this and skips with a clear message
-  rather than falsely passing or failing. Verify on a real network before
-  relying on it for a demo.
+- **LAN discovery is verified end-to-end on a real network**: a Windows
+  host and a VirtualBox Linux VM (host-only adapter), both single-file and
+  folder transfers, output byte-identical to the original (sha256
+  confirmed). The unit test suite in this project's original dev sandbox
+  couldn't exercise this at all — a local firewall silently dropped the
+  inbound multicast join — so the test suite still detects that condition
+  and skips with a clear message rather than falsely passing or failing;
+  that's an environment property, not a statement about whether the
+  feature works. One real bug surfaced during this verification: on a
+  multi-homed machine (VM host with a NAT adapter *and* a host-only one,
+  or a laptop with Wi-Fi + Ethernet + VPN), interface auto-selection could
+  pick different networks on each side and the beacon would never arrive.
+  Fixed with an explicit `-iface`/`PARCEL_LAN_IFACE` override — see
+  "Crossing networks" above — though on a normal single-NIC machine (the
+  common two-laptop-on-one-Wi-Fi case) discovery works with zero flags.
 - **NAT hole punching is best-effort**, not guaranteed. It's split
   deterministically by role (sender dials, receiver accepts) rather than
   racing both directions on both sides — an earlier symmetric version had
