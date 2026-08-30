@@ -11,10 +11,12 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
 	"parcel/internal/codeword"
 	"parcel/internal/discovery"
+	"parcel/internal/qr"
 	"parcel/internal/source"
 	"parcel/internal/transfer"
 )
@@ -47,6 +49,7 @@ Send/receive flags:
 
 Send-only flags:
   -no-compress    disable flate compression of the transferred stream
+  -qr             also print the pairing code as a terminal QR code
 
 Receive-only flags:
   -out <dir>      directory to write the received file/folder into (default ".")
@@ -102,6 +105,7 @@ func runSend(args []string) int {
 	relayOnly := fs.Bool("relay-only", false, "skip the local-network attempt, always use the relay")
 	relayAddr := fs.String("relay", os.Getenv("PARCEL_RELAY"), "relay server address to fall back to (also read from PARCEL_RELAY)")
 	noCompress := fs.Bool("no-compress", false, "disable compression")
+	showQR := fs.Bool("qr", false, "also print the pairing code as a QR code")
 	fs.SetOutput(os.Stderr)
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -168,6 +172,9 @@ func runSend(args []string) int {
 	}
 
 	fmt.Printf("Your code: %s\n", code)
+	if *showQR {
+		printQR(code)
+	}
 	fmt.Printf("Share it with the receiver — valid for %s. Waiting for them to connect...\n", transfer.SessionWindow)
 
 	for {
@@ -273,6 +280,22 @@ func runReceive(args []string) int {
 		fmt.Fprintf(os.Stderr, "parcel receive: %v\n", err)
 		return exitRuntime
 	}
+}
+
+// printQR renders code as a terminal QR code (see internal/qr). This is a
+// convenience layered on top of the spoken/typed code, which stays the
+// primary, fully-verified pairing path — printQR degrades to a plain
+// warning rather than failing the send if encoding ever errors (it never
+// should for a code this package generates, but a QR failure is not a
+// reason to abort a transfer).
+func printQR(code string) {
+	m, err := qr.Encode(strings.ToUpper(code))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "parcel send: could not render QR code: %v\n", err)
+		return
+	}
+	fmt.Println("Or scan (unverified against a real camera in development — falls back to the code above if it doesn't scan):")
+	fmt.Print(qr.Render(m))
 }
 
 func runRelay(args []string) int {
