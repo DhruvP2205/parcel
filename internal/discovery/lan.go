@@ -55,17 +55,27 @@ func groupAddr() (*net.UDPAddr, error) {
 
 // multicastInterface picks a concrete, up, multicast-capable, non-loopback
 // interface with an IPv4 address. Both Announce and Discover are pinned to
-// the same explicit interface rather than letting the OS pick one for
-// each independently — on multi-interface machines (Wi-Fi + Ethernet +
-// virtual adapters, which is the common case on a laptop) the two can
+// the same explicit interface rather than letting the OS pick one for each
+// independently — on multi-interface machines (Wi-Fi + Ethernet + virtual
+// adapters, which is the common case on a laptop, and guaranteed on a
+// VirtualBox VM with both a NAT and a host-only adapter) the two can
 // disagree, and the beacon silently never arrives.
-func multicastInterface() (*net.Interface, net.IP, error) {
+//
+// override, if non-empty, forces a specific interface by name (as reported
+// by `ip addr` / `ipconfig`) or by one of its IPv4 addresses, instead of
+// auto-picking the first match — needed exactly when auto-pick guesses
+// wrong. Callers surface this as the -iface flag / PARCEL_LAN_IFACE.
+func multicastInterface(override string) (*net.Interface, net.IP, error) {
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		return nil, nil, fmt.Errorf("discovery: list interfaces: %w", err)
 	}
+	overrideIP := net.ParseIP(override)
 	for _, ifi := range ifaces {
 		if ifi.Flags&net.FlagUp == 0 || ifi.Flags&net.FlagMulticast == 0 || ifi.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		if override != "" && overrideIP == nil && ifi.Name != override {
 			continue
 		}
 		addrs, err := ifi.Addrs()
@@ -81,9 +91,15 @@ func multicastInterface() (*net.Interface, net.IP, error) {
 			if ip4 == nil {
 				continue
 			}
+			if overrideIP != nil && !ip4.Equal(overrideIP.To4()) {
+				continue
+			}
 			ifiCopy := ifi
 			return &ifiCopy, ip4, nil
 		}
+	}
+	if override != "" {
+		return nil, nil, fmt.Errorf("discovery: no up, multicast-capable IPv4 interface matching -iface %q found", override)
 	}
 	return nil, nil, errors.New("discovery: no up, multicast-capable IPv4 network interface found")
 }
@@ -94,13 +110,14 @@ func beaconTag(code string, salt []byte) ([]byte, error) {
 
 // Announce periodically broadcasts a beacon for code advertising tcpPort
 // until ctx is cancelled. Intended to run in its own goroutine on the
-// sending side, in parallel with net.Listener.Accept.
-func Announce(ctx context.Context, code string, tcpPort int) error {
+// sending side, in parallel with net.Listener.Accept. iface overrides
+// interface auto-selection; see multicastInterface.
+func Announce(ctx context.Context, code string, tcpPort int, iface string) error {
 	addr, err := groupAddr()
 	if err != nil {
 		return fmt.Errorf("discovery: resolve multicast group: %w", err)
 	}
-	_, ifaceIP, err := multicastInterface()
+	_, ifaceIP, err := multicastInterface(iface)
 	if err != nil {
 		return err
 	}
@@ -142,13 +159,14 @@ func Announce(ctx context.Context, code string, tcpPort int) error {
 
 // Discover listens for a beacon matching code and returns the sender's
 // address and TCP port to connect to. It blocks until a match arrives or
-// ctx is done.
-func Discover(ctx context.Context, code string) (net.IP, int, error) {
+// ctx is done. iface overrides interface auto-selection; see
+// multicastInterface.
+func Discover(ctx context.Context, code string, iface string) (net.IP, int, error) {
 	addr, err := groupAddr()
 	if err != nil {
 		return nil, 0, fmt.Errorf("discovery: resolve multicast group: %w", err)
 	}
-	ifi, _, err := multicastInterface()
+	ifi, _, err := multicastInterface(iface)
 	if err != nil {
 		return nil, 0, err
 	}

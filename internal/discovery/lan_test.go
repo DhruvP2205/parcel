@@ -28,11 +28,11 @@ func probeMulticast(t *testing.T) {
 	probeOnce.Do(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		go func() { _ = Announce(ctx, "probe-only-code", 1) }()
+		go func() { _ = Announce(ctx, "probe-only-code", 1, "") }()
 
 		discoverCtx, cancelD := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancelD()
-		_, _, err := Discover(discoverCtx, "probe-only-code")
+		_, _, err := Discover(discoverCtx, "probe-only-code", "")
 		if err != nil {
 			multicastOK = false
 			probeSkipMsg = "UDP multicast loopback is not working in this environment " +
@@ -57,14 +57,14 @@ func TestAnnounceAndDiscoverMatchOnCode(t *testing.T) {
 	announceCtx, cancelAnnounce := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancelAnnounce()
 	go func() {
-		if err := Announce(announceCtx, code, fakeTCPPort); err != nil {
+		if err := Announce(announceCtx, code, fakeTCPPort, ""); err != nil {
 			t.Logf("announce ended: %v", err)
 		}
 	}()
 
 	discoverCtx, cancelDiscover := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancelDiscover()
-	ip, port, err := Discover(discoverCtx, code)
+	ip, port, err := Discover(discoverCtx, code, "")
 	if err != nil {
 		t.Fatalf("discover: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestDiscoverIgnoresWrongCode(t *testing.T) {
 	announceCtx, cancelAnnounce := context.WithTimeout(context.Background(), 6*time.Second)
 	defer cancelAnnounce()
 	go func() {
-		_ = Announce(announceCtx, "correct-horse-battery", 11111)
+		_ = Announce(announceCtx, "correct-horse-battery", 11111, "")
 	}()
 
 	// Positive control first, on the same running Announce: a matching
@@ -91,7 +91,7 @@ func TestDiscoverIgnoresWrongCode(t *testing.T) {
 	// mismatch would).
 	matchCtx, cancelMatch := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancelMatch()
-	if _, port, err := Discover(matchCtx, "correct-horse-battery"); err != nil {
+	if _, port, err := Discover(matchCtx, "correct-horse-battery", ""); err != nil {
 		t.Fatalf("positive control failed, matching code should have been discovered: %v", err)
 	} else if port != 11111 {
 		t.Errorf("got port %d, want 11111", port)
@@ -101,7 +101,7 @@ func TestDiscoverIgnoresWrongCode(t *testing.T) {
 	// though the same beacons are still being broadcast.
 	mismatchCtx, cancelMismatch := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancelMismatch()
-	if _, _, err := Discover(mismatchCtx, "totally-different-code"); err != ErrNoPeerFound {
+	if _, _, err := Discover(mismatchCtx, "totally-different-code", ""); err != ErrNoPeerFound {
 		t.Errorf("expected ErrNoPeerFound for mismatched code, got %v", err)
 	}
 }

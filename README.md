@@ -81,6 +81,13 @@ then point both `send` and `receive` at it:
 (or set `PARCEL_RELAY` instead of passing `-relay` each time). `-lan-only`
 and `-relay-only` are available if you want to force one path.
 
+On a machine with more than one network adapter (a laptop with Wi-Fi +
+Ethernet + VPN, or a VM host with a NAT adapter alongside a host-only one),
+LAN discovery's auto-picked interface on each side can disagree, and the
+beacon silently never arrives. Pin both sides to the same interface with
+`-iface <name-or-ip>` (or `PARCEL_LAN_IFACE`) — e.g. the host-only adapter's
+IP when testing between a host machine and a VirtualBox guest.
+
 ## Verifying the zero-dependency claim
 
 ```sh

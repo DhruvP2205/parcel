@@ -46,6 +46,11 @@ Send/receive flags:
   -relay-only     skip the local-network attempt, always use the relay
   -relay <addr>   relay server address, e.g. relay.example.com:4321
                   (also read from PARCEL_RELAY)
+  -iface <name>   network interface name or IP to use for LAN discovery
+                  (also read from PARCEL_LAN_IFACE) — set this on
+                  multi-adapter machines (e.g. a VM host, or a laptop with
+                  Wi-Fi + Ethernet + VPN) if discovery isn't finding your
+                  peer; both sides must pick interfaces on the same network
 
 Send-only flags:
   -no-compress    disable flate compression of the transferred stream
@@ -104,6 +109,7 @@ func runSend(args []string) int {
 	lanOnly := fs.Bool("lan-only", false, "only attempt local-network discovery")
 	relayOnly := fs.Bool("relay-only", false, "skip the local-network attempt, always use the relay")
 	relayAddr := fs.String("relay", os.Getenv("PARCEL_RELAY"), "relay server address to fall back to (also read from PARCEL_RELAY)")
+	ifaceOverride := fs.String("iface", os.Getenv("PARCEL_LAN_IFACE"), "network interface name or IP for LAN discovery (also read from PARCEL_LAN_IFACE)")
 	noCompress := fs.Bool("no-compress", false, "disable compression")
 	showQR := fs.Bool("qr", false, "also print the pairing code as a QR code")
 	fs.SetOutput(os.Stderr)
@@ -161,7 +167,7 @@ func runSend(args []string) int {
 		tcpPort := ln.Addr().(*net.TCPAddr).Port
 
 		go func() {
-			if err := discovery.Announce(ctx, code, tcpPort); err != nil && ctx.Err() == nil {
+			if err := discovery.Announce(ctx, code, tcpPort, *ifaceOverride); err != nil && ctx.Err() == nil {
 				fmt.Fprintf(os.Stderr, "parcel send: LAN announce stopped early: %v\n", err)
 			}
 		}()
@@ -214,6 +220,7 @@ func runReceive(args []string) int {
 	lanOnly := fs.Bool("lan-only", false, "only attempt local-network discovery")
 	relayOnly := fs.Bool("relay-only", false, "skip the local-network attempt, always use the relay")
 	relayAddr := fs.String("relay", os.Getenv("PARCEL_RELAY"), "relay server address to fall back to (also read from PARCEL_RELAY)")
+	ifaceOverride := fs.String("iface", os.Getenv("PARCEL_LAN_IFACE"), "network interface name or IP for LAN discovery (also read from PARCEL_LAN_IFACE)")
 	fs.SetOutput(os.Stderr)
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -249,7 +256,7 @@ func runReceive(args []string) int {
 		}
 
 		connectCtx, cancel := context.WithTimeout(context.Background(), remaining)
-		conn, err := connectReceive(connectCtx, code, *lanOnly, *relayOnly, *relayAddr)
+		conn, err := connectReceive(connectCtx, code, *lanOnly, *relayOnly, *relayAddr, *ifaceOverride)
 		cancel()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "parcel receive: %v\n", err)
@@ -392,14 +399,14 @@ func acceptSendConn(ctx context.Context, ln net.Listener, relayOnly, lanOnly boo
 // connectReceive is the receiving side of acceptSendConn's race: it tries
 // LAN discovery first, then falls back to a relay if configured and LAN
 // hasn't produced a peer within transfer.LANDiscoveryTimeout.
-func connectReceive(ctx context.Context, code string, lanOnly, relayOnly bool, relayAddr string) (net.Conn, error) {
+func connectReceive(ctx context.Context, code string, lanOnly, relayOnly bool, relayAddr, ifaceOverride string) (net.Conn, error) {
 	if relayOnly {
 		return connectViaRelayOrPunch(ctx, relayAddr, code, discovery.RoleReceiver)
 	}
 
 	lanCh, lanErrCh := make(chan net.Conn, 1), make(chan error, 1)
 	go func() {
-		conn, err := dialLAN(ctx, code)
+		conn, err := dialLAN(ctx, code, ifaceOverride)
 		if err != nil {
 			lanErrCh <- err
 			return
@@ -494,8 +501,8 @@ func connectViaRelayOrPunch(ctx context.Context, relayAddr, code string, role di
 	return direct, nil
 }
 
-func dialLAN(ctx context.Context, code string) (net.Conn, error) {
-	ip, port, err := discovery.Discover(ctx, code)
+func dialLAN(ctx context.Context, code, ifaceOverride string) (net.Conn, error) {
+	ip, port, err := discovery.Discover(ctx, code, ifaceOverride)
 	if err != nil {
 		return nil, err
 	}
