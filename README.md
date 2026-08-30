@@ -1,31 +1,18 @@
-# 📦 parcel
+# 📦 Parcel: Secure P2P File Transfer with Zero Dependencies
 
 <div align="center">
 
-[![Go Version](https://img.shields.io/badge/Go-1.25%2B-00ADD8?style=flat-square&logo=go&logoColor=white)](go.mod)
-[![Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen?style=flat-square&logo=go&logoColor=white)](deps-proof.txt)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-passing-brightgreen?style=flat-square)](#)
-[![Reproducible Build](https://img.shields.io/badge/build-reproducible-blueviolet?style=flat-square)](#)
-[![Platforms](https://img.shields.io/badge/platform-linux%20%7C%20macOS%20%7C%20windows-lightgrey?style=flat-square)](#)
-
-<img src="https://readme-typing-svg.demolab.com/?font=Fira+Code&size=18&pause=1200&color=00ADD8&center=true&vCenter=true&width=600&lines=Zero+third-party+dependencies.;Peer-to-peer+%2B+end-to-end+encrypted.;LAN+first%2C+relay+fallback%2C+fully+resumable.;No+accounts.+No+cloud+storage.+No+packages." alt="rotating tagline" />
+[![Go Version](https://img.shields.io/badge/Go-1.25%2B-00ADD8?style=flat-square&logo=go&logoColor=white)](go.mod) [![Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen?style=flat-square&logo=go&logoColor=white)](deps-proof.txt) [![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE) [![Tests](https://img.shields.io/badge/tests-passing-brightgreen?style=flat-square)](#) [![Reproducible Build](https://img.shields.io/badge/build-reproducible-blueviolet?style=flat-square)](#) [![Platforms](https://img.shields.io/badge/platform-linux%20%7C%20macOS%20%7C%20windows-lightgrey?style=flat-square)](#)
 
 </div>
 
-A peer-to-peer, end-to-end encrypted file and folder transfer tool. Two
-people share a short spoken code, and parcel connects them directly — over
-the same Wi-Fi, or across the internet through an optional relay. Dropped
-connections resume automatically instead of starting over. No accounts, no
-cloud storage, no third-party code — `go.mod` has no `require` block.
+A peer-to-peer, end-to-end encrypted file and folder transfer tool. Two people share a short spoken code, and parcel connects them directly — over the same Wi-Fi, or across the internet through an optional relay. Dropped connections resume automatically instead of starting over. No accounts, no cloud storage, no third-party code — `go.mod` has no `require` block.
+
+![Parcel Infographic](docs/Parcel_Secure_File_Transfer_Infographic.png)
 
 Built for the **Zero Dependency** hackathon, **Track C (Web & Network)**.
 
-**Contents:** [🔎 At a glance](#at-a-glance) · [✨ What it does](#what-it-actually-does) ·
-[📸 See it in action](#see-it-in-action) · [⚡ Quick start](#quick-start) ·
-[🌐 Crossing networks](#crossing-networks) · [🧩 Why zero-dependency](#why-zero-dependency) ·
-[🔍 Verifying it](#verifying-zero-dependencies) · [🔁 Reproducible build](#reproducible-build) ·
-[🗂️ Layout](#layout) · [✅ What's been verified](#whats-been-verified) · [📄 License](#license)
+**Contents:** [🔎 At a glance](#at-a-glance) · [✨ What it does](#what-it-actually-does) · [📸 See it in action](#see-it-in-action) · [⚡ Quick start](#quick-start) · [🌐 Crossing networks](#crossing-networks) · [🧵 Concurrency model](#concurrency-model) · [🚩 Flag reference](#flag-reference) · [🧩 Why zero-dependency](#why-zero-dependency) · [🔍 Verifying it](#verifying-zero-dependencies) · [🔁 Reproducible build](#reproducible-build) · [🗂️ Layout](#layout) · [✅ What's been verified](#whats-been-verified) · [📄 License](#license)
 
 ---
 
@@ -83,8 +70,7 @@ flowchart TD
 | ![Sender terminal](docs/screenshot-sender.png) | ![Receiver terminal](docs/screenshot-receiver.png) |
 | *(placeholder — drop a screenshot at `docs/screenshot-sender.png`)* | *(placeholder — drop a screenshot at `docs/screenshot-receiver.png`)* |
 
-Same flow on Windows, macOS, or Linux — `parcel` is a single binary with no
-install step.
+Same flow on Windows, macOS, or Linux — `parcel` is a single binary with no install step.
 
 ---
 
@@ -108,22 +94,13 @@ On the other machine (same network, or with a relay configured — see below):
 ./bin/parcel receive crimson-otter-lagoon-basil
 ```
 
-A directory works the same way (`./bin/parcel send ./my-folder`); it
-arrives unpacked back into a directory on the receiving end.
+A directory works the same way (`./bin/parcel send ./my-folder`); it arrives unpacked back into a directory on the receiving end.
 
 ### 🌐 Crossing networks
 
-**🤔 Why you need a relay:** same-network discovery works by broadcasting to
-nearby devices — it physically can't reach a machine on a different
-network (different Wi-Fi, different building, different country). When
-the two of you aren't on the same network, something reachable from both
-sides has to introduce you. That's the relay's whole job: a small program
-that helps two `parcel` clients find each other, and forwards data between
-them if a direct connection can't be made. It only ever sees
-already-encrypted bytes — it can't read the file either way.
+**🤔 Why you need a relay:** same-network discovery works by broadcasting to nearby devices — it physically can't reach a machine on a different network (different Wi-Fi, different building, different country). When the two of you aren't on the same network, something reachable from both sides has to introduce you. That's the relay's whole job: a small program that helps two `parcel` clients find each other, and forwards data between them if a direct connection can't be made. It only ever sees already-encrypted bytes — it can't read the file either way.
 
-**1️⃣ Start a relay**, on any machine both sides can reach — a VPS, a spare
-computer, a cheap cloud instance:
+**1️⃣ Start a relay**, on any machine both sides can reach — a VPS, a spare computer, a cheap cloud instance:
 
 ```sh
 ./bin/parcel relay -addr :4321
@@ -143,16 +120,9 @@ computer, a cheap cloud instance:
 
 (or set `PARCEL_RELAY` once instead of passing `-relay` every time).
 
-`-lan-only` / `-relay-only` force a specific path. `-relay` also takes a
-comma-separated list (`-relay a.example.com:4321,b.example.com:4321`) —
-parcel tries each in order and uses the first that answers; give both
-sides the same list in the same order, since pairing only happens when
-both land on the same relay. If none answer, parcel prints the exact
-command to run your own relay.
+`-lan-only` / `-relay-only` force a specific path. `-relay` also takes a comma-separated list (`-relay a.example.com:4321,b.example.com:4321`) — parcel tries each in order and uses the first that answers; give both sides the same list in the same order, since pairing only happens when both land on the same relay. If none answer, parcel prints the exact command to run your own relay.
 
-On a laptop with more than one network connection (Wi-Fi + Ethernet + VPN),
-pin both sides to the same one with `-iface <name-or-ip>` (or
-`PARCEL_LAN_IFACE`) so discovery looks in the same place on both ends.
+On a laptop with more than one network connection (Wi-Fi + Ethernet + VPN), pin both sides to the same one with `-iface <name-or-ip>` (or `PARCEL_LAN_IFACE`) so discovery looks in the same place on both ends.
 
 #### 📸 Relay in action
 
@@ -161,17 +131,51 @@ pin both sides to the same one with `-iface <name-or-ip>` (or
 | ![Relay terminal](docs/screenshot-relay.png) | ![Sender via relay](docs/screenshot-relay-sender.png) | ![Receiver via relay](docs/screenshot-relay-receiver.png) |
 | *(placeholder — `docs/screenshot-relay.png`)* | *(placeholder — `docs/screenshot-relay-sender.png`)* | *(placeholder — `docs/screenshot-relay-receiver.png`)* |
 
+### 🧵 Concurrency model
+
+The relay handles every pair independently: each accepted connection gets its own goroutine (`go handleRelayConn(...)` in `internal/discovery/relay_server.go`), so one slow or stalled pair never blocks another from pairing. Once two connections are matched, a `splice` step pipes bytes both ways at once — one goroutine copying sender→receiver, another receiver→sender — and closes both sides the moment either one disconnects. On the client side, `send`/`receive` race local-network discovery, the relay, and (once relayed) a direct NAT-punch attempt as concurrent goroutines over channels, using whichever connects first and cleanly discarding the rest — no locks, just goroutines and channel selects, which is what a `sync`/`errgroup`-style dependency would compile down to anyway.
+
+---
+
+## 🚩 Flag reference
+
+Every flag `parcel` understands, what it defaults to, and when you'd actually reach for it. Run `parcel -h` any time to see this same list from the terminal.
+
+### 🔗 Shared by `send` and `receive`
+
+| Flag | Default | What it does | When to use it |
+|---|---|---|---|
+| `-lan-only` | off | Only attempts local-network discovery — never contacts a relay, even if `-relay`/`PARCEL_RELAY` is set. | Both machines are definitely on the same network and you want a fast, clear failure instead of waiting on a relay you don't need. |
+| `-relay-only` | off | Skips the local-network attempt entirely and goes straight to the relay. Requires `-relay` (or `PARCEL_RELAY`) to be set. | You already know the two machines are on different networks — skips the ~15s local-network wait. |
+| `-relay <addrs>` | `PARCEL_RELAY` env var, else empty | Relay server address to fall back to if local-network discovery doesn't find a peer. Accepts a comma-separated list (`a:4321,b:4321`), tried in order until one answers. | Sending or receiving across different networks — different Wi-Fi, different building, different town. Both sides need the **same list in the same order**, since pairing only happens between clients that land on the same relay. |
+| `-iface <name-or-ip>` | `PARCEL_LAN_IFACE` env var, else all interfaces | Pins local-network discovery to one network interface. | A laptop or VM host with more than one network connection (Wi-Fi + Ethernet + VPN) where discovery isn't finding the peer because it's listening on the wrong one. |
+
+### 📤 `send`-only
+
+| Flag | Default | What it does | When to use it |
+|---|---|---|---|
+| `-no-compress` | off | Skips flate compression of the transferred stream. | Rarely needed — parcel already checks whether compression actually shrinks the data and skips it automatically for photos, videos, and zips. Use this to force it off yourself, e.g. to save CPU time on a very large already-compressed folder. |
+| `-qr` | off | Also prints the pairing code as a terminal QR code, next to the plain-text code. | The receiver has a phone or camera handy and scanning is quicker than typing a 4-word code. |
+
+### 📥 `receive`-only
+
+| Flag | Default | What it does | When to use it |
+|---|---|---|---|
+| `-out <dir>` | `.` (current directory) | Directory to write the received file or folder into. | Downloading straight into a specific folder (e.g. `-out ~/Downloads`) instead of wherever the command happens to be run from. |
+
+### 🛰️ `relay`-only
+
+| Flag | Default | What it does | When to use it |
+|---|---|---|---|
+| `-addr <addr>` | `:4321` | Address (and port) the relay listens on. | Running the relay on a specific port — e.g. because a firewall only opens one — or binding it to one interface (`192.168.1.10:4321`) instead of all of them. |
+
+Two environment variables mirror the most-used flags, so you don't have to repeat them on every command: `PARCEL_RELAY` (same as `-relay`) and `PARCEL_LAN_IFACE` (same as `-iface`).
+
 ---
 
 ## 🧩 Why zero-dependency
 
-The idea here — code-based pairing, encrypted transfer, resuming after a
-drop, relaying past NAT — isn't new. `croc` (`github.com/schollz/croc`)
-already does it, well. What's different is what it's built from: every
-third-party package a tool imports is code nobody here wrote or reviewed,
-with its own dependencies riding along. `go.mod` has no `require` block —
-everything is either Go's standard library or code written in this repo,
-short enough to actually read end-to-end.
+The idea here — code-based pairing, encrypted transfer, resuming after a drop, relaying past NAT — isn't new. `croc` (`github.com/schollz/croc`) already does it, well. What's different is what it's built from: every third-party package a tool imports is code nobody here wrote or reviewed, with its own dependencies riding along. `go.mod` has no `require` block — everything is either Go's standard library or code written in this repo, short enough to actually read end-to-end.
 
 ```
 Third-party runtime dependencies
@@ -180,8 +184,7 @@ croc     ███████████████████████�
 parcel   ▏0
 ```
 
-<details>
-<summary><strong>📊 Head-to-head vs croc — expand for the full dependency comparison</strong></summary>
+### 📊 Head-to-head vs croc — expand for the full dependency comparison
 
 | 📦 croc depends on | 🎯 what it's for | 🔧 what parcel uses instead |
 |---|---|---|
@@ -194,23 +197,13 @@ parcel   ▏0
 | `github.com/stretchr/testify` | test assertions | Go's own `testing` package |
 | `golang.org/x/net`, `golang.org/x/sys`, `golang.org/x/term`, `golang.org/x/time` | extra OS/network helpers | not needed — `net`, `os`, and `time` cover it |
 
-croc also has a few things parcel doesn't try to match: skipping
-`.gitignore`-matched files when sending a folder, a SOCKS5 proxy option,
-and interactive prompts. Smaller scope, not a hidden gap.
-
-</details>
+croc also has a few things parcel doesn't try to match: skipping `.gitignore`-matched files when sending a folder, a SOCKS5 proxy option, and interactive prompts. Smaller scope, not a hidden gap.
 
 ### 🔐 Self-hosting the relay
 
-croc automatically picks one of three shared public relays for you. Parcel
-leaves that choice to you — `-relay`/`PARCEL_RELAY` is empty by default.
-Run `parcel relay -addr :4321` on any machine you already have — 🖥️ a VPS,
-a spare computer, a cheap cloud instance — and point both sides at it.
+croc automatically picks one of three shared public relays for you. Parcel leaves that choice to you — `-relay`/`PARCEL_RELAY` is empty by default. Run `parcel relay -addr :4321` on any machine you already have — 🖥️ a VPS, a spare computer, a cheap cloud instance — and point both sides at it.
 
-🔒 Encryption is what protects the file, no matter whose relay carries it.
-Choosing your own relay just means it's your machine, your uptime, nobody
-else's logs in between — and it can be listed first in the fallback list
-above.
+🔒 Encryption is what protects the file, no matter whose relay carries it. Choosing your own relay just means it's your machine, your uptime, nobody else's logs in between — and it can be listed first in the fallback list above.
 
 ---
 
@@ -228,12 +221,9 @@ See `STDLIB.md` for exactly what each substitution replaces.
 make reproducible
 ```
 
-Builds the artifact twice (`-trimpath -buildvcs=false`, so the result
-doesn't depend on the build path or git state) and diffs them — verified
-byte-identical, including from a second, unrelated directory.
+Builds the artifact twice (`-trimpath -buildvcs=false`, so the result doesn't depend on the build path or git state) and diffs them — verified byte-identical, including from a second, unrelated directory.
 
-<details>
-<summary>Actual captured run</summary>
+### Actual captured run
 
 ```
 $ go build -trimpath -buildvcs=false -o bin/parcel-a ./cmd/parcel
@@ -245,14 +235,9 @@ $ cmp bin/parcel-a bin/parcel-b && echo byte-identical
 byte-identical
 ```
 
-</details>
-
 ---
 
 ## 🗂️ Layout
-
-<details>
-<summary>Expand folder tree</summary>
 
 ```
 parcel/
@@ -271,10 +256,7 @@ parcel/
 └── deps-proof.txt        go list -m all output
 ```
 
-</details>
-
-Tests live next to the code they cover (`_test.go` files, Go's own idiom)
-rather than a separate `tests/` tree.
+Tests live next to the code they cover (`_test.go` files, Go's own idiom) rather than a separate `tests/` tree.
 
 ---
 
@@ -289,11 +271,7 @@ rather than a separate `tests/` tree.
 | 🔑 Pairing codes | ✅ 4 words, chosen to keep coincidental matches astronomically rare |
 | 🗜️ Compression | ✅ Skipped automatically when it wouldn't help (photos, videos, zips) |
 
-A couple of good-to-knows: on a machine with more than one network
-connection, use `-iface`/`PARCEL_LAN_IFACE` (see
-[Crossing networks](#crossing-networks)) so both sides look in the same
-place; and the relay only ever forwards already-encrypted bytes, whether
-it's yours or someone else's.
+A couple of good-to-knows: on a machine with more than one network connection, use `-iface`/`PARCEL_LAN_IFACE` (see [Crossing networks](#crossing-networks)) so both sides look in the same place; and the relay only ever forwards already-encrypted bytes, whether it's yours or someone else's.
 
 ---
 
