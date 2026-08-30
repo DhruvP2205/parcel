@@ -88,6 +88,14 @@ instead. `go.mod` has no `require` block; `go list -m all` prints only
     outcome channels), which is what `errgroup` would compile down to
     here anyway.
 
+15. **`github.com/fatih/color`, `github.com/mattn/go-colorable`, and
+    `github.com/mattn/go-isatty`** — `internal/ansi` hand-rolls the whole
+    stack: raw SGR escape constants, a terminal check per OS (`os.Stat`'s
+    `ModeCharDevice` bit on Unix; `GetConsoleMode`/`SetConsoleMode` via
+    `syscall.NewLazyDLL("kernel32.dll")` on Windows, which also opts a
+    legacy `cmd.exe`/PowerShell console into VT processing), and respects
+    the `NO_COLOR` convention. No terminal library, no ANSI-code package.
+
 ## Package Killer
 
 **Replaces:** `github.com/skip2/go-qrcode` (and equivalents like

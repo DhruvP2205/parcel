@@ -11,9 +11,11 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"regexp"
 	"strings"
 	"time"
 
+	"parcel/internal/ansi"
 	"parcel/internal/codeword"
 	"parcel/internal/discovery"
 	"parcel/internal/qr"
@@ -82,13 +84,37 @@ const (
 	exitRuntime = 2
 )
 
+// usage is colorized by pattern-matching over the plain-text template above
+// rather than maintaining a second copy — headers, flag tokens, and the
+// "parcel <subcommand>" pairs get highlighted, everything else prints as-is.
+var (
+	usageHeaderRe = regexp.MustCompile(`(?m)^(Usage:|Send/receive flags:|Send-only flags:|Receive-only flags:|Relay flags:|Examples:)$`)
+	usageFlagRe   = regexp.MustCompile(`(?m)^(  -[\w-]+)`)
+	usageCmdRe    = regexp.MustCompile(`\bparcel (send|receive|relay)\b`)
+)
+
+func colorUsage(enabled bool) string {
+	if !enabled {
+		return usage
+	}
+	s := usage
+	s = strings.Replace(s, "parcel — zero-dependency", ansi.BoldMagenta+"parcel"+ansi.Reset+" — zero-dependency", 1)
+	s = usageHeaderRe.ReplaceAllString(s, ansi.HeaderStyle+"$1"+ansi.Reset)
+	s = usageFlagRe.ReplaceAllString(s, ansi.Yellow+"$1"+ansi.Reset)
+	s = usageCmdRe.ReplaceAllStringFunc(s, func(m string) string {
+		sub := strings.TrimPrefix(m, "parcel ")
+		return ansi.Bold + "parcel" + ansi.Reset + " " + ansi.Green + sub + ansi.Reset
+	})
+	return s
+}
+
 func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
 func run(args []string) int {
 	if len(args) < 1 {
-		fmt.Fprint(os.Stderr, usage)
+		fmt.Fprint(os.Stderr, colorUsage(ansi.StderrEnabled))
 		return exitUsage
 	}
 
@@ -99,12 +125,12 @@ func run(args []string) int {
 		return runReceive(args[1:])
 	case "relay":
 		return runRelay(args[1:])
-	case "-h", "--help", "help":
-		fmt.Fprint(os.Stdout, usage)
+	case "-h", "-help", "--help", "help":
+		fmt.Fprint(os.Stdout, colorUsage(ansi.StdoutEnabled))
 		return exitOK
 	default:
-		fmt.Fprintf(os.Stderr, "parcel: unknown command %q\n\n", args[0])
-		fmt.Fprint(os.Stderr, usage)
+		fmt.Fprintf(os.Stderr, "%s\n\n", ansi.Err(ansi.BoldRed, fmt.Sprintf("parcel: unknown command %q", args[0])))
+		fmt.Fprint(os.Stderr, colorUsage(ansi.StderrEnabled))
 		return exitUsage
 	}
 }
@@ -122,40 +148,40 @@ func runSend(args []string) int {
 		return exitUsage
 	}
 	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "parcel send: expected exactly one <path> argument")
+		fmt.Fprintln(os.Stderr, ansi.Err(ansi.Red, "parcel send: expected exactly one <path> argument"))
 		return exitUsage
 	}
 	path := fs.Arg(0)
 	relayAddrs := parseRelayAddrs(*relayAddr)
 
 	if _, err := os.Stat(path); err != nil {
-		fmt.Fprintf(os.Stderr, "parcel send: %v\n", err)
+		fmt.Fprintln(os.Stderr, ansi.Err(ansi.Red, fmt.Sprintf("parcel send: %v", err)))
 		return exitRuntime
 	}
 	if *lanOnly && *relayOnly {
-		fmt.Fprintln(os.Stderr, "parcel send: -lan-only and -relay-only are mutually exclusive")
+		fmt.Fprintln(os.Stderr, ansi.Err(ansi.Red, "parcel send: -lan-only and -relay-only are mutually exclusive"))
 		return exitUsage
 	}
 	if *relayOnly && len(relayAddrs) == 0 {
-		fmt.Fprintln(os.Stderr, "parcel send: -relay-only requires -relay <addr>[,<addr>...] (or PARCEL_RELAY)")
+		fmt.Fprintln(os.Stderr, ansi.Err(ansi.Red, "parcel send: -relay-only requires -relay <addr>[,<addr>...] (or PARCEL_RELAY)"))
 		return exitUsage
 	}
 
 	prepared, err := source.Prepare(path, !*noCompress)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "parcel send: %v\n", err)
+		fmt.Fprintln(os.Stderr, ansi.Err(ansi.Red, fmt.Sprintf("parcel send: %v", err)))
 		return exitRuntime
 	}
 	defer prepared.Cleanup()
 	if prepared.IsCompressed {
-		fmt.Println("Compression helped — sending a compressed copy.")
+		fmt.Println(ansi.Out(ansi.Dim, "Compression helped — sending a compressed copy."))
 	} else if !*noCompress {
-		fmt.Println("Compression didn't help for this content — sending uncompressed.")
+		fmt.Println(ansi.Out(ansi.Dim, "Compression didn't help for this content — sending uncompressed."))
 	}
 
 	code, err := codeword.Generate()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "parcel send: %v\n", err)
+		fmt.Fprintln(os.Stderr, ansi.Err(ansi.Red, fmt.Sprintf("parcel send: %v", err)))
 		return exitRuntime
 	}
 
@@ -183,20 +209,20 @@ func runSend(args []string) int {
 		}()
 	}
 
-	fmt.Printf("Your code: %s\n", code)
+	fmt.Printf("Your code: %s\n", ansi.Out(ansi.BoldMagenta, code))
 	if *showQR {
 		printQR(code)
 	}
-	fmt.Printf("Share it with the receiver — valid for %s. Waiting for them to connect...\n", transfer.SessionWindow)
+	fmt.Println(ansi.Out(ansi.Cyan, fmt.Sprintf("Share it with the receiver — valid for %s. Waiting for them to connect...", transfer.SessionWindow)))
 
 	for {
 		conn, err := acceptSendConn(ctx, ln, *relayOnly, *lanOnly, relayAddrs, code)
 		if err != nil {
 			if ctx.Err() != nil {
-				fmt.Fprintln(os.Stderr, "parcel send: timed out waiting for a receiver")
+				fmt.Fprintln(os.Stderr, ansi.Err(ansi.Red, "parcel send: timed out waiting for a receiver"))
 				return exitRuntime
 			}
-			fmt.Fprintf(os.Stderr, "parcel send: %v\n", err)
+			fmt.Fprintln(os.Stderr, ansi.Err(ansi.Red, fmt.Sprintf("parcel send: %v", err)))
 			if errors.Is(err, discovery.ErrAllRelaysUnreachable) {
 				adviseSelfHostRelay()
 			}
@@ -211,14 +237,14 @@ func runSend(args []string) int {
 		conn.Close()
 
 		if err == nil {
-			fmt.Println("Transfer complete.")
+			fmt.Println(ansi.Out(ansi.BoldGreen, "✔ Transfer complete."))
 			return exitOK
 		}
 		if errors.Is(err, transfer.ErrConnectionLost) {
-			fmt.Fprintf(os.Stderr, "parcel send: connection dropped (%v) — waiting for the receiver to reconnect...\n", err)
+			fmt.Fprintln(os.Stderr, ansi.Err(ansi.Yellow, fmt.Sprintf("parcel send: connection dropped (%v) — waiting for the receiver to reconnect...", err)))
 			continue
 		}
-		fmt.Fprintf(os.Stderr, "parcel send: %v\n", err)
+		fmt.Fprintln(os.Stderr, ansi.Err(ansi.Red, fmt.Sprintf("parcel send: %v", err)))
 		return exitRuntime
 	}
 }
@@ -235,7 +261,7 @@ func runReceive(args []string) int {
 		return exitUsage
 	}
 	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "parcel receive: expected exactly one <code> argument")
+		fmt.Fprintln(os.Stderr, ansi.Err(ansi.Red, "parcel receive: expected exactly one <code> argument"))
 		return exitUsage
 	}
 	relayAddrs := parseRelayAddrs(*relayAddr)
@@ -248,15 +274,15 @@ func runReceive(args []string) int {
 	code := strings.ToLower(fs.Arg(0))
 
 	if err := codeword.Validate(code); err != nil {
-		fmt.Fprintf(os.Stderr, "parcel receive: %q doesn't look like a valid code: %v\n", code, err)
+		fmt.Fprintln(os.Stderr, ansi.Err(ansi.Red, fmt.Sprintf("parcel receive: %q doesn't look like a valid code: %v", code, err)))
 		return exitUsage
 	}
 	if *lanOnly && *relayOnly {
-		fmt.Fprintln(os.Stderr, "parcel receive: -lan-only and -relay-only are mutually exclusive")
+		fmt.Fprintln(os.Stderr, ansi.Err(ansi.Red, "parcel receive: -lan-only and -relay-only are mutually exclusive"))
 		return exitUsage
 	}
 	if *relayOnly && len(relayAddrs) == 0 {
-		fmt.Fprintln(os.Stderr, "parcel receive: -relay-only requires -relay <addr>[,<addr>...] (or PARCEL_RELAY)")
+		fmt.Fprintln(os.Stderr, ansi.Err(ansi.Red, "parcel receive: -relay-only requires -relay <addr>[,<addr>...] (or PARCEL_RELAY)"))
 		return exitUsage
 	}
 
@@ -267,7 +293,7 @@ func runReceive(args []string) int {
 	for attempt := 1; ; attempt++ {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			fmt.Fprintln(os.Stderr, "parcel receive: timed out looking for a sender with that code")
+			fmt.Fprintln(os.Stderr, ansi.Err(ansi.Red, "parcel receive: timed out looking for a sender with that code"))
 			return exitRuntime
 		}
 
@@ -275,7 +301,7 @@ func runReceive(args []string) int {
 		conn, err := connectReceive(connectCtx, code, *lanOnly, *relayOnly, relayAddrs, *ifaceOverride)
 		cancel()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "parcel receive: %v\n", err)
+			fmt.Fprintln(os.Stderr, ansi.Err(ansi.Red, fmt.Sprintf("parcel receive: %v", err)))
 			if errors.Is(err, discovery.ErrAllRelaysUnreachable) {
 				adviseSelfHostRelay()
 			}
@@ -283,27 +309,27 @@ func runReceive(args []string) int {
 		}
 
 		if attempt == 1 {
-			fmt.Printf("Connected to %v, receiving...\n", conn.RemoteAddr())
+			fmt.Println(ansi.Out(ansi.Cyan, fmt.Sprintf("Connected to %v, receiving...", conn.RemoteAddr())))
 		} else {
-			fmt.Printf("Reconnected to %v, resuming...\n", conn.RemoteAddr())
+			fmt.Println(ansi.Out(ansi.Cyan, fmt.Sprintf("Reconnected to %v, resuming...", conn.RemoteAddr())))
 		}
 
 		err = transfer.Receive(conn, code, *out)
 		conn.Close()
 
 		if err == nil {
-			fmt.Println("Transfer complete.")
+			fmt.Println(ansi.Out(ansi.BoldGreen, "✔ Transfer complete."))
 			return exitOK
 		}
 		if errors.Is(err, transfer.ErrConnectionLost) {
-			fmt.Fprintf(os.Stderr, "parcel receive: connection dropped (%v) — retrying...\n", err)
+			fmt.Fprintln(os.Stderr, ansi.Err(ansi.Yellow, fmt.Sprintf("parcel receive: connection dropped (%v) — retrying...", err)))
 			time.Sleep(backoff)
 			if backoff < maxBackoff {
 				backoff *= 2
 			}
 			continue
 		}
-		fmt.Fprintf(os.Stderr, "parcel receive: %v\n", err)
+		fmt.Fprintln(os.Stderr, ansi.Err(ansi.Red, fmt.Sprintf("parcel receive: %v", err)))
 		return exitRuntime
 	}
 }
@@ -317,10 +343,10 @@ func runReceive(args []string) int {
 func printQR(code string) {
 	m, err := qr.Encode(strings.ToUpper(code))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "parcel send: could not render QR code: %v\n", err)
+		fmt.Fprintln(os.Stderr, ansi.Err(ansi.Yellow, fmt.Sprintf("parcel send: could not render QR code: %v", err)))
 		return
 	}
-	fmt.Println("Or scan (unverified against a real camera in development — falls back to the code above if it doesn't scan):")
+	fmt.Println(ansi.Out(ansi.Dim, "Or scan (unverified against a real camera in development — falls back to the code above if it doesn't scan):"))
 	fmt.Print(qr.Render(m))
 }
 
@@ -332,16 +358,16 @@ func runRelay(args []string) int {
 		return exitUsage
 	}
 	if fs.NArg() != 0 {
-		fmt.Fprintln(os.Stderr, "parcel relay: unexpected arguments")
+		fmt.Fprintln(os.Stderr, ansi.Err(ansi.Red, "parcel relay: unexpected arguments"))
 		return exitUsage
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	fmt.Printf("Relay listening on %s — forwards encrypted bytes only, never sees file content. Ctrl+C to stop.\n", *addr)
+	fmt.Println(ansi.Out(ansi.BoldGreen, fmt.Sprintf("Relay listening on %s — forwards encrypted bytes only, never sees file content. Ctrl+C to stop.", *addr)))
 	if err := discovery.RunRelay(ctx, *addr); err != nil {
-		fmt.Fprintf(os.Stderr, "parcel relay: %v\n", err)
+		fmt.Fprintln(os.Stderr, ansi.Err(ansi.Red, fmt.Sprintf("parcel relay: %v", err)))
 		return exitRuntime
 	}
 	return exitOK
@@ -366,10 +392,10 @@ func parseRelayAddrs(raw string) []string {
 // relay address turned out to be unreachable, rather than leaving the user
 // with just a bare dial-error string.
 func adviseSelfHostRelay() {
-	fmt.Fprintln(os.Stderr, "None of the configured relay addresses could be reached.")
-	fmt.Fprintln(os.Stderr, "You can run your own on any machine reachable from both sides:")
-	fmt.Fprintln(os.Stderr, "  parcel relay -addr :4321")
-	fmt.Fprintln(os.Stderr, "then point both send and receive at it: -relay <that machine's address>:4321 (or set PARCEL_RELAY)")
+	fmt.Fprintln(os.Stderr, ansi.Err(ansi.Yellow, "None of the configured relay addresses could be reached."))
+	fmt.Fprintln(os.Stderr, ansi.Err(ansi.Yellow, "You can run your own on any machine reachable from both sides:"))
+	fmt.Fprintln(os.Stderr, ansi.Err(ansi.Yellow, "  parcel relay -addr :4321"))
+	fmt.Fprintln(os.Stderr, ansi.Err(ansi.Yellow, "then point both send and receive at it: -relay <that machine's address>:4321 (or set PARCEL_RELAY)"))
 }
 
 // acceptSendConn waits for one incoming connection: on the local network
