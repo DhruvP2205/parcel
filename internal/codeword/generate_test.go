@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestGenerateProducesThreeDistinctKnownWords(t *testing.T) {
+func TestGenerateProducesDistinctKnownWords(t *testing.T) {
 	for i := 0; i < 200; i++ {
 		code, err := Generate()
 		if err != nil {
@@ -47,8 +47,9 @@ func TestValidateRejectsMalformedCodes(t *testing.T) {
 		"",
 		"onlyoneword",
 		"two-words",
-		"crimson-otter-notarealword",
-		"crimson-otter-lagoon-extra",
+		"crimson-otter-lagoon",      // one short of NumWords
+		"crimson-otter-basil-notarealword",
+		"crimson-otter-lagoon-basil-extra", // one over NumWords
 	}
 	for _, c := range cases {
 		if err := Validate(c); err == nil {

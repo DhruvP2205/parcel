@@ -65,7 +65,7 @@ Relay flags:
 Examples:
   parcel send ./photo.jpg
   parcel send ./my-project-folder
-  parcel receive crimson-otter-lagoon
+  parcel receive crimson-otter-lagoon-basil
   parcel send ./photo.jpg -relay relay.example.com:4321
   parcel relay -addr :4321
 `

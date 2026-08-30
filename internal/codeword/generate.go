@@ -13,10 +13,14 @@ import (
 // WordCount is the number of words in the underlying list.
 var WordCount = len(wordlist)
 
-// NumWords is how many distinct words make up one generated code.
-const NumWords = 3
+// NumWords is how many distinct words make up one generated code. Four
+// words (not three) keeps the collision odds negligible even when many
+// codes are live on the same relay at once: 192^P(4) ≈ 1.32 billion
+// orderings means ~100,000 simultaneously active codes yield an expected
+// ~4 colliding pairs, versus ~718 at three words. See wordlist.go.
+const NumWords = 4
 
-// Generate returns a fresh code such as "crimson-otter-lagoon", drawn
+// Generate returns a fresh code such as "crimson-otter-lagoon-basil", drawn
 // without replacement using a cryptographically secure random source
 // (crypto/rand via math/big.Int, which does its own rejection sampling
 // internally to avoid modulo bias).

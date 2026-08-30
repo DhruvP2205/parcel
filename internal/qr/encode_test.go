@@ -93,14 +93,15 @@ func TestEncodeRejectsLowercase(t *testing.T) {
 }
 
 // Every pairing code parcel can actually generate must round-trip —
-// exercises realistic 3-word, hyphen-joined, uppercased codes across a
-// spread of lengths, including the worst case (three 9-letter words).
+// exercises realistic 4-word, hyphen-joined, uppercased codes across a
+// spread of lengths, including the worst case (the four longest words in
+// the list, 36 chars, still well under version 2-L's capacity).
 func TestRoundTripRealisticPairingCodes(t *testing.T) {
 	codes := []string{
-		"ANT-FIG-SKY",
-		"CRIMSON-OTTER-LAGOON",
-		"TANGERINE-OBSIDIAN-WISTERIA", // near the longest real words in the list
-		"SYCAMORE-PHEASANT-BRAMBLE",
+		"ANT-FIG-SKY-OWL",
+		"CRIMSON-OTTER-LAGOON-BASIL",
+		"TANGERINE-OBSIDIAN-OLEANDER-WISTERIA", // the four longest real words in the list
+		"SYCAMORE-PHEASANT-BRAMBLE-HICKORY",
 	}
 	for _, c := range codes {
 		roundTrip(t, c)

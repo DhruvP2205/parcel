@@ -12,9 +12,11 @@ Built for the **Zero Dependency** hackathon, **Track C (Web & Network)**.
 ## What it actually does
 
 - **Pairing**: `parcel send` prints a short code like `crimson-otter-
-  lagoon` (three words, drawn with `crypto/rand`). `parcel receive
-  <code>` on the other machine finds and connects to the sender using
-  that code — nothing is typed except the code itself.
+  lagoon-basil` (four words, drawn with `crypto/rand` — sized so that
+  even ~100,000 codes live on one relay at once yield only a handful of
+  expected collisions, see Limits below). `parcel receive <code>` on the
+  other machine finds and connects to the sender using that code —
+  nothing is typed except the code itself.
 - **Encryption**: an X25519 key exchange (`crypto/ecdh`) authenticated by
   the shared code, then AES-256-GCM (`crypto/aes`+`crypto/cipher`) for
   every chunk. A wrong code fails the handshake closed — see
@@ -49,13 +51,13 @@ On one machine:
 
 ```sh
 ./bin/parcel send ./photo.jpg
-# Your code: crimson-otter-lagoon
+# Your code: crimson-otter-lagoon-basil
 ```
 
 On the other machine (same LAN, or with a relay configured — see below):
 
 ```sh
-./bin/parcel receive crimson-otter-lagoon
+./bin/parcel receive crimson-otter-lagoon-basil
 ```
 
 A directory works the same way (`./bin/parcel send ./my-folder`); it
@@ -75,7 +77,7 @@ then point both `send` and `receive` at it:
 
 ```sh
 ./bin/parcel send ./photo.jpg -relay relay.example.com:4321
-./bin/parcel receive crimson-otter-lagoon -relay relay.example.com:4321
+./bin/parcel receive crimson-otter-lagoon-basil -relay relay.example.com:4321
 ```
 
 (or set `PARCEL_RELAY` instead of passing `-relay` each time). `-lan-only`
@@ -171,19 +173,40 @@ own idiom), not a separate `tests/` tree — every `internal/*` package and
   at the cost of not attempting true bidirectional simultaneous-open, so
   it works on permissive/full-cone NATs and not on symmetric or
   restrictive ones. The relay is always the guaranteed fallback.
-- **QR pairing (`-qr`) is verified by round-tripping every encode through
-  a matching from-scratch decoder** (see `internal/qr/encode_test.go`),
-  which proves internal consistency of the bit packing, Reed-Solomon,
-  module placement, and masking — but this sandboxed environment has no
-  way to physically scan a code with a phone camera, so that hasn't been
-  confirmed against a real scanner. The spoken/typed code is the primary,
-  fully-verified pairing method regardless; `-qr` is strictly additive.
+- **QR pairing (`-qr`) is verified end-to-end, including a real phone
+  camera scan**: internally it round-trips every encode through a
+  matching from-scratch decoder (see `internal/qr/encode_test.go`), which
+  proves the bit packing, Reed-Solomon, module placement, and masking are
+  correct; separately, a real phone camera scan was confirmed to connect
+  and complete a transfer. One real thing this surfaced: QR's Alphanumeric
+  mode has no lowercase letters, so a scanned code always comes back
+  shouted — `parcel receive` normalizes case before validating, so a
+  scanned code and a typed one are handled identically. The spoken/typed
+  code remains the primary pairing method regardless; `-qr` is strictly
+  additive.
 - **The relay is an untrusted forwarder by design**, not audited
   infrastructure — it only ever sees already-encrypted bytes and the
   pairing code's handshake still fails closed against an active
   man-in-the-middle, but anyone running a public relay should treat it
   like any other internet-facing service (rate limiting, monitoring, etc.
-  aren't implemented here).
+  aren't implemented here). The relay path itself is verified across two
+  real, separate machines (not just loopback), sha256-confirmed
+  byte-identical.
+- **Pairing codes are 4 words, not 3, specifically to keep accidental
+  collisions negligible at scale.** With 192 words drawn without
+  replacement, a 3-word code only has ~7 million possible orderings —
+  birthday-paradox math says ~100,000 codes live on one shared relay at
+  once would produce an expected ~718 colliding pairs (two unrelated
+  users independently generating the identical code, which — since the
+  code *is* the shared secret — would let their sessions successfully
+  pair and decrypt each other's data by pure coincidence, not attack). 4
+  words raises the space to ~1.32 billion orderings, cutting that same
+  scenario down to an expected ~4 colliding pairs. This bounds a
+  probabilistic risk rather than eliminating it structurally — unlike
+  magic-wormhole's server-allocated unique nameplate, parcel's relay has
+  no central uniqueness check — but at any realistic self-hosted-relay
+  scale the residual risk is negligible. LAN discovery has no equivalent
+  central authority either way, so word-space is the only lever there.
 - **Compression won't help already-compressed formats** (photos, videos,
   zips) — `internal/source` only keeps a compressed copy if it's
   measurably smaller, so this is a non-issue in practice, but don't
