@@ -26,6 +26,7 @@ Built for the **Zero Dependency** hackathon, **Track C (Web & Network)**.
 | ♻️ **Resumable** | Picks up right where a dropped connection left off |
 | 📁 **Folders** | Sends whole folders, compressing them when it helps |
 | 📷 **QR pairing** | Optional on-screen QR code as a shortcut for typing |
+| 🎨 **Terminal UX** | Colorized output and a live waiting spinner — respects `NO_COLOR`, degrades to plain text when piped |
 | 🧩 **Dependencies** | Zero — nothing but Go's standard library |
 
 ---
@@ -40,6 +41,7 @@ Built for the **Zero Dependency** hackathon, **Track C (Web & Network)**.
 | ♻️ **Resumable** | The receiver remembers the last verified chunk in `.part.meta`; the sender picks up right there on reconnect, within the code's 5-minute window. |
 | 📁 **Folders** | Packed into one stream (`internal/archive`) and compressed with `compress/flate` (`internal/compress`) when that actually helps. |
 | 📷 **QR pairing** | `-qr` on `send` also shows the code as an on-screen QR code (`internal/qr`) — a shortcut, not a replacement for the spoken code. |
+| 🎨 **Terminal UX** | Colorized help/status output and an animated spinner while waiting for a peer, both hand-rolled in `internal/ansi` — no `fatih/color`, `mattn/go-isatty`, or `schollz/progressbar`. Auto-disables on `NO_COLOR` or when output isn't a real terminal. |
 
 ### 🗺️ How it picks a connection path
 
@@ -109,13 +111,13 @@ A directory works the same way (`./bin/parcel send ./my-folder`); it arrives unp
 **2️⃣ Send**, pointing at that relay:
 
 ```sh
-./bin/parcel send ./photo.jpg -relay relay.example.com:4321
+./bin/parcel send -relay relay.example.com:4321 ./photo.jpg
 ```
 
 **3️⃣ Receive**, pointing at the same relay:
 
 ```sh
-./bin/parcel receive crimson-otter-lagoon-basil -relay relay.example.com:4321
+./bin/parcel receive -relay relay.example.com:4321 crimson-otter-lagoon-basil
 ```
 
 (or set `PARCEL_RELAY` once instead of passing `-relay` every time).
@@ -139,7 +141,7 @@ The relay handles every pair independently: each accepted connection gets its ow
 
 ## 🚩 Flag reference
 
-Every flag `parcel` understands, what it defaults to, and when you'd actually reach for it. Run `parcel -h` any time to see this same list from the terminal.
+Every flag `parcel` understands, what it defaults to, and when you'd actually reach for it. Run `parcel -h` (also `-help` / `--help` / `help`) any time to see this same list from the terminal, colorized when the terminal supports it (auto-disabled when piped, redirected, or `NO_COLOR` is set).
 
 ### 🔗 Shared by `send` and `receive`
 
@@ -178,13 +180,15 @@ Two environment variables mirror the most-used flags, so you don't have to repea
 The idea here — code-based pairing, encrypted transfer, resuming after a drop, relaying past NAT — isn't new. `croc` (`github.com/schollz/croc`) already does it, well. What's different is what it's built from: every third-party package a tool imports is code nobody here wrote or reviewed, with its own dependencies riding along. `go.mod` has no `require` block — everything is either Go's standard library or code written in this repo, short enough to actually read end-to-end.
 
 ```
-Third-party runtime dependencies
+Third-party runtime dependencies (direct, per go.mod)
 
-croc     ████████████████████████████████████████████████ 19
+croc     ████████████████████████████████████████████████ 28
 parcel   ▏0
 ```
 
-### 📊 Head-to-head vs croc — expand for the full dependency comparison
+*(croc `v11`, checked directly against its `go.mod` — 28 direct requires, 77 more transitive on top of that. parcel: `go.mod` has no `require` block at all, direct or transitive. Verify either any time: `curl -s https://raw.githubusercontent.com/schollz/croc/master/go.mod`.)*
+
+### 📊 Head-to-head vs croc — a representative sample, not all 28
 
 | 📦 croc depends on | 🎯 what it's for | 🔧 what parcel uses instead |
 |---|---|---|
@@ -194,10 +198,12 @@ parcel   ▏0
 | `github.com/schollz/peerdiscovery` | finds peers on the local network | a small UDP broadcast — `internal/discovery/lan.go` |
 | `github.com/kalafut/imohash`, `github.com/cespare/xxhash/v2`, `github.com/minio/highwayhash` | fast file hashing | `crypto/sha256` for verifying each chunk — `internal/transfer` |
 | `github.com/schollz/cli/v2` | command-line parsing | Go's own `flag` package |
+| `github.com/mattn/go-colorable`, `github.com/mattn/go-isatty` | colored terminal output, including on legacy Windows consoles | hand-rolled `internal/ansi` — raw SGR escape codes plus a per-OS terminal check (`ModeCharDevice` on Unix, `GetConsoleMode`/`SetConsoleMode` via `syscall` on Windows) |
+| `github.com/schollz/progressbar/v3` | animated terminal progress indicator | a hand-rolled spinner — `internal/ansi/spinner.go` |
 | `github.com/stretchr/testify` | test assertions | Go's own `testing` package |
 | `golang.org/x/net`, `golang.org/x/sys`, `golang.org/x/term`, `golang.org/x/time` | extra OS/network helpers | not needed — `net`, `os`, and `time` cover it |
 
-croc also has a few things parcel doesn't try to match: skipping `.gitignore`-matched files when sending a folder, a SOCKS5 proxy option, and interactive prompts. Smaller scope, not a hidden gap.
+croc also has a few things parcel doesn't try to match: skipping `.gitignore`-matched files when sending a folder, a SOCKS5 proxy option, interactive prompts, and (in its newer `v11` releases) an embedded Tailscale/gVisor network stack (`tailscale.com`, `gvisor.dev/gvisor`) for more advanced connectivity than parcel's plain hole-punch attempt in `internal/discovery/punch.go`. Smaller scope, not a hidden gap.
 
 ### 🔐 Self-hosting the relay
 
@@ -250,7 +256,8 @@ parcel/
 │   ├── compress/         compress/flate wrapper with a skip-if-useless heuristic
 │   ├── discovery/        LAN multicast discovery, relay server/client, NAT punching
 │   ├── source/           prepares a path (archive? compress?) before sending
-│   └── qr/               from-scratch QR encoder (+ a decoder, used only for tests)
+│   ├── qr/               from-scratch QR encoder (+ a decoder, used only for tests)
+│   └── ansi/             hand-rolled color + spinner (no colorable/isatty/progressbar libs)
 ├── Makefile              build / test / vet / deps-proof / reproducible
 ├── STDLIB.md             every stdlib-for-package substitution made
 └── deps-proof.txt        go list -m all output
@@ -264,9 +271,11 @@ Tests live next to the code they cover (`_test.go` files, Go's own idiom) rather
 
 | Area | Status |
 |---|---|
-| 🖥️ Local network transfer | ✅ Verified on real hardware (Windows + Linux VM) — byte-identical results |
-| 🌍 Cross-network / relay | ✅ Verified across two separate machines — byte-identical results |
-| 📷 QR pairing | ✅ Verified with a real phone camera scan |
+| 🖥️ Local network transfer | ✅ Verified on real hardware (Windows + Linux VM) — byte-identical results (SHA-256 checked) |
+| 📁 Folder transfer | ✅ Verified — packed, sent, and unpacked with every file intact across machines |
+| 🌍 Cross-network / relay | ✅ Verified across two separate machines, `-relay-only` forced — byte-identical results |
+| 📷 QR pairing | ✅ Verified with a real phone camera scan, decoded back to the exact pairing code |
+| 🔐 Wrong-code handling | ✅ Verified — a mismatched code never pairs; fails closed instead of connecting a stranger |
 | 🔌 Direct internet connection | ✅ Works on most home routers; falls back to relaying the data automatically elsewhere |
 | 🔑 Pairing codes | ✅ 4 words, chosen to keep coincidental matches astronomically rare |
 | 🗜️ Compression | ✅ Skipped automatically when it wouldn't help (photos, videos, zips) |

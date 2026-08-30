@@ -73,7 +73,7 @@ Examples:
   parcel send ./photo.jpg
   parcel send ./my-project-folder
   parcel receive crimson-otter-lagoon-basil
-  parcel send ./photo.jpg -relay relay.example.com:4321
+  parcel send -relay relay.example.com:4321 ./photo.jpg
   parcel relay -addr :4321
 `
 
