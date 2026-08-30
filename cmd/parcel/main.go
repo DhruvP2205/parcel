@@ -44,7 +44,12 @@ already end-to-end encrypted before it arrives.
 Send/receive flags:
   -lan-only       only attempt local-network discovery, never contact a relay
   -relay-only     skip the local-network attempt, always use the relay
-  -relay <addr>   relay server address, e.g. relay.example.com:4321
+  -relay <addrs>  relay server address, e.g. relay.example.com:4321 — or a
+                  comma-separated list (relay1:4321,relay2:4321) tried in
+                  order, so a second address is used if the first is
+                  unreachable. Both sides must be given the same list in
+                  the same order, since pairing only happens between
+                  clients that land on the same relay process.
                   (also read from PARCEL_RELAY)
   -iface <name>   network interface name or IP to use for LAN discovery
                   (also read from PARCEL_LAN_IFACE) — set this on
@@ -108,7 +113,7 @@ func runSend(args []string) int {
 	fs := flag.NewFlagSet("send", flag.ContinueOnError)
 	lanOnly := fs.Bool("lan-only", false, "only attempt local-network discovery")
 	relayOnly := fs.Bool("relay-only", false, "skip the local-network attempt, always use the relay")
-	relayAddr := fs.String("relay", os.Getenv("PARCEL_RELAY"), "relay server address to fall back to (also read from PARCEL_RELAY)")
+	relayAddr := fs.String("relay", os.Getenv("PARCEL_RELAY"), "comma-separated relay server address(es) to fall back to, tried in order (also read from PARCEL_RELAY)")
 	ifaceOverride := fs.String("iface", os.Getenv("PARCEL_LAN_IFACE"), "network interface name or IP for LAN discovery (also read from PARCEL_LAN_IFACE)")
 	noCompress := fs.Bool("no-compress", false, "disable compression")
 	showQR := fs.Bool("qr", false, "also print the pairing code as a QR code")
@@ -121,6 +126,7 @@ func runSend(args []string) int {
 		return exitUsage
 	}
 	path := fs.Arg(0)
+	relayAddrs := parseRelayAddrs(*relayAddr)
 
 	if _, err := os.Stat(path); err != nil {
 		fmt.Fprintf(os.Stderr, "parcel send: %v\n", err)
@@ -130,8 +136,8 @@ func runSend(args []string) int {
 		fmt.Fprintln(os.Stderr, "parcel send: -lan-only and -relay-only are mutually exclusive")
 		return exitUsage
 	}
-	if *relayOnly && *relayAddr == "" {
-		fmt.Fprintln(os.Stderr, "parcel send: -relay-only requires -relay <addr> (or PARCEL_RELAY)")
+	if *relayOnly && len(relayAddrs) == 0 {
+		fmt.Fprintln(os.Stderr, "parcel send: -relay-only requires -relay <addr>[,<addr>...] (or PARCEL_RELAY)")
 		return exitUsage
 	}
 
@@ -184,13 +190,16 @@ func runSend(args []string) int {
 	fmt.Printf("Share it with the receiver — valid for %s. Waiting for them to connect...\n", transfer.SessionWindow)
 
 	for {
-		conn, err := acceptSendConn(ctx, ln, *relayOnly, *lanOnly, *relayAddr, code)
+		conn, err := acceptSendConn(ctx, ln, *relayOnly, *lanOnly, relayAddrs, code)
 		if err != nil {
 			if ctx.Err() != nil {
 				fmt.Fprintln(os.Stderr, "parcel send: timed out waiting for a receiver")
 				return exitRuntime
 			}
 			fmt.Fprintf(os.Stderr, "parcel send: %v\n", err)
+			if errors.Is(err, discovery.ErrAllRelaysUnreachable) {
+				adviseSelfHostRelay()
+			}
 			return exitRuntime
 		}
 
@@ -219,7 +228,7 @@ func runReceive(args []string) int {
 	out := fs.String("out", ".", "directory to write the received file/folder into")
 	lanOnly := fs.Bool("lan-only", false, "only attempt local-network discovery")
 	relayOnly := fs.Bool("relay-only", false, "skip the local-network attempt, always use the relay")
-	relayAddr := fs.String("relay", os.Getenv("PARCEL_RELAY"), "relay server address to fall back to (also read from PARCEL_RELAY)")
+	relayAddr := fs.String("relay", os.Getenv("PARCEL_RELAY"), "comma-separated relay server address(es) to fall back to, tried in order (also read from PARCEL_RELAY)")
 	ifaceOverride := fs.String("iface", os.Getenv("PARCEL_LAN_IFACE"), "network interface name or IP for LAN discovery (also read from PARCEL_LAN_IFACE)")
 	fs.SetOutput(os.Stderr)
 	if err := fs.Parse(args); err != nil {
@@ -229,6 +238,7 @@ func runReceive(args []string) int {
 		fmt.Fprintln(os.Stderr, "parcel receive: expected exactly one <code> argument")
 		return exitUsage
 	}
+	relayAddrs := parseRelayAddrs(*relayAddr)
 	// QR's Alphanumeric mode (internal/qr) can only encode uppercase
 	// letters, so a scanned code comes back shouted (ISO/IEC 18004's
 	// Alphanumeric charset has no lowercase). Normalize here so a scanned
@@ -245,8 +255,8 @@ func runReceive(args []string) int {
 		fmt.Fprintln(os.Stderr, "parcel receive: -lan-only and -relay-only are mutually exclusive")
 		return exitUsage
 	}
-	if *relayOnly && *relayAddr == "" {
-		fmt.Fprintln(os.Stderr, "parcel receive: -relay-only requires -relay <addr> (or PARCEL_RELAY)")
+	if *relayOnly && len(relayAddrs) == 0 {
+		fmt.Fprintln(os.Stderr, "parcel receive: -relay-only requires -relay <addr>[,<addr>...] (or PARCEL_RELAY)")
 		return exitUsage
 	}
 
@@ -262,10 +272,13 @@ func runReceive(args []string) int {
 		}
 
 		connectCtx, cancel := context.WithTimeout(context.Background(), remaining)
-		conn, err := connectReceive(connectCtx, code, *lanOnly, *relayOnly, *relayAddr, *ifaceOverride)
+		conn, err := connectReceive(connectCtx, code, *lanOnly, *relayOnly, relayAddrs, *ifaceOverride)
 		cancel()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "parcel receive: %v\n", err)
+			if errors.Is(err, discovery.ErrAllRelaysUnreachable) {
+				adviseSelfHostRelay()
+			}
 			return exitRuntime
 		}
 
@@ -334,13 +347,38 @@ func runRelay(args []string) int {
 	return exitOK
 }
 
+// parseRelayAddrs splits a comma-separated -relay/PARCEL_RELAY value into
+// its individual addresses, trimming whitespace and dropping empty entries
+// (so "" and "a:1, ,b:2" both behave sensibly). No addresses are ever
+// assumed by default — an empty result means "no relay configured," never
+// a hidden fallback to some baked-in server.
+func parseRelayAddrs(raw string) []string {
+	var addrs []string
+	for a := range strings.SplitSeq(raw, ",") {
+		if a = strings.TrimSpace(a); a != "" {
+			addrs = append(addrs, a)
+		}
+	}
+	return addrs
+}
+
+// adviseSelfHostRelay prints actionable next steps when every configured
+// relay address turned out to be unreachable, rather than leaving the user
+// with just a bare dial-error string.
+func adviseSelfHostRelay() {
+	fmt.Fprintln(os.Stderr, "None of the configured relay addresses could be reached.")
+	fmt.Fprintln(os.Stderr, "You can run your own on any machine reachable from both sides:")
+	fmt.Fprintln(os.Stderr, "  parcel relay -addr :4321")
+	fmt.Fprintln(os.Stderr, "then point both send and receive at it: -relay <that machine's address>:4321 (or set PARCEL_RELAY)")
+}
+
 // acceptSendConn waits for one incoming connection: on the local network
 // (via ln, which Announce is advertising on), or through a relay, or both
 // racing — whichever produces a peer first wins. See connectReceive for
 // the receiving side of the same strategy.
-func acceptSendConn(ctx context.Context, ln net.Listener, relayOnly, lanOnly bool, relayAddr, code string) (net.Conn, error) {
+func acceptSendConn(ctx context.Context, ln net.Listener, relayOnly, lanOnly bool, relayAddrs []string, code string) (net.Conn, error) {
 	if relayOnly {
-		return connectViaRelayOrPunch(ctx, relayAddr, code, discovery.RoleSender)
+		return connectViaRelayOrPunch(ctx, relayAddrs, code, discovery.RoleSender)
 	}
 
 	lanCh, lanErrCh := make(chan net.Conn, 1), make(chan error, 1)
@@ -353,7 +391,7 @@ func acceptSendConn(ctx context.Context, ln net.Listener, relayOnly, lanOnly boo
 		lanCh <- conn
 	}()
 
-	if lanOnly || relayAddr == "" {
+	if lanOnly || len(relayAddrs) == 0 {
 		select {
 		case conn := <-lanCh:
 			return conn, nil
@@ -373,7 +411,7 @@ func acceptSendConn(ctx context.Context, ln net.Listener, relayOnly, lanOnly boo
 
 	relayCh, relayErrCh := make(chan net.Conn, 1), make(chan error, 1)
 	go func() {
-		conn, err := connectViaRelayOrPunch(ctx, relayAddr, code, discovery.RoleSender)
+		conn, err := connectViaRelayOrPunch(ctx, relayAddrs, code, discovery.RoleSender)
 		if err != nil {
 			relayErrCh <- err
 			return
@@ -393,7 +431,7 @@ func acceptSendConn(ctx context.Context, ln net.Listener, relayOnly, lanOnly boo
 		case conn := <-lanCh:
 			return conn, nil
 		case lanErr := <-lanErrCh:
-			return nil, fmt.Errorf("both local-network and relay attempts failed: lan=%v relay=%v", lanErr, relayErr)
+			return nil, fmt.Errorf("both local-network and relay attempts failed: lan=%w relay=%w", lanErr, relayErr)
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
@@ -405,9 +443,9 @@ func acceptSendConn(ctx context.Context, ln net.Listener, relayOnly, lanOnly boo
 // connectReceive is the receiving side of acceptSendConn's race: it tries
 // LAN discovery first, then falls back to a relay if configured and LAN
 // hasn't produced a peer within transfer.LANDiscoveryTimeout.
-func connectReceive(ctx context.Context, code string, lanOnly, relayOnly bool, relayAddr, ifaceOverride string) (net.Conn, error) {
+func connectReceive(ctx context.Context, code string, lanOnly, relayOnly bool, relayAddrs []string, ifaceOverride string) (net.Conn, error) {
 	if relayOnly {
-		return connectViaRelayOrPunch(ctx, relayAddr, code, discovery.RoleReceiver)
+		return connectViaRelayOrPunch(ctx, relayAddrs, code, discovery.RoleReceiver)
 	}
 
 	lanCh, lanErrCh := make(chan net.Conn, 1), make(chan error, 1)
@@ -420,7 +458,7 @@ func connectReceive(ctx context.Context, code string, lanOnly, relayOnly bool, r
 		lanCh <- conn
 	}()
 
-	if lanOnly || relayAddr == "" {
+	if lanOnly || len(relayAddrs) == 0 {
 		select {
 		case conn := <-lanCh:
 			return conn, nil
@@ -442,7 +480,7 @@ func connectReceive(ctx context.Context, code string, lanOnly, relayOnly bool, r
 
 	relayCh, relayErrCh := make(chan net.Conn, 1), make(chan error, 1)
 	go func() {
-		conn, err := connectViaRelayOrPunch(ctx, relayAddr, code, discovery.RoleReceiver)
+		conn, err := connectViaRelayOrPunch(ctx, relayAddrs, code, discovery.RoleReceiver)
 		if err != nil {
 			relayErrCh <- err
 			return
@@ -462,7 +500,7 @@ func connectReceive(ctx context.Context, code string, lanOnly, relayOnly bool, r
 		case conn := <-lanCh:
 			return conn, nil
 		case lanErr := <-lanErrCh:
-			return nil, fmt.Errorf("both local-network and relay attempts failed: lan=%v relay=%v", lanErr, relayErr)
+			return nil, fmt.Errorf("both local-network and relay attempts failed: lan=%w relay=%w", lanErr, relayErr)
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
@@ -478,14 +516,14 @@ func connectReceive(ctx context.Context, code string, lanOnly, relayOnly bool, r
 // connection — no longer needed — is closed and the direct one is used
 // instead; if it fails or times out, the already-open relay connection is
 // used as-is. Either way the caller gets exactly one connection back.
-func connectViaRelayOrPunch(ctx context.Context, relayAddr, code string, role discovery.RelayRole) (net.Conn, error) {
+func connectViaRelayOrPunch(ctx context.Context, relayAddrs []string, code string, role discovery.RelayRole) (net.Conn, error) {
 	punchLn, lnErr := net.Listen("tcp", ":0")
 	punchPort := 0
 	if lnErr == nil {
 		punchPort = punchLn.Addr().(*net.TCPAddr).Port
 	}
 
-	relayConn, peer, err := discovery.DialRelay(ctx, relayAddr, code, role, punchPort)
+	relayConn, peer, err := discovery.DialRelayFallback(ctx, relayAddrs, code, role, punchPort)
 	if err != nil {
 		if punchLn != nil {
 			punchLn.Close()

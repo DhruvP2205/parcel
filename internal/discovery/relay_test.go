@@ -3,6 +3,7 @@ package discovery
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"sync"
@@ -102,6 +103,69 @@ func TestRelayRejectsDuplicateRoleForSameCode(t *testing.T) {
 		t.Errorf("expected ErrRelayRejected, got %v", err)
 	}
 	<-firstDone
+}
+
+func TestDialRelayFallbackSkipsUnreachableAddresses(t *testing.T) {
+	addr, _ := startTestRelay(t)
+
+	// A closed listener's address refuses connections immediately, so the
+	// fallback should move past it to the real relay without stalling for
+	// the full relayConnectTimeout.
+	deadLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	deadAddr := deadLn.Addr().String()
+	deadLn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var senderConn, receiverConn net.Conn
+	var senderErr, receiverErr error
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		senderConn, _, senderErr = DialRelayFallback(ctx, []string{deadAddr, addr}, "fallback-code", RoleSender, 0)
+	}()
+	go func() {
+		defer wg.Done()
+		receiverConn, _, receiverErr = DialRelayFallback(ctx, []string{deadAddr, addr}, "fallback-code", RoleReceiver, 0)
+	}()
+	wg.Wait()
+	if senderErr != nil {
+		t.Fatalf("sender dial: %v", senderErr)
+	}
+	if receiverErr != nil {
+		t.Fatalf("receiver dial: %v", receiverErr)
+	}
+	senderConn.Close()
+	receiverConn.Close()
+}
+
+func TestDialRelayFallbackReturnsErrAllRelaysUnreachableWhenNoneWork(t *testing.T) {
+	deadLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	deadAddr := deadLn.Addr().String()
+	deadLn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, _, err = DialRelayFallback(ctx, []string{deadAddr}, "unreachable-code", RoleSender, 0)
+	if !errors.Is(err, ErrAllRelaysUnreachable) {
+		t.Errorf("expected ErrAllRelaysUnreachable, got %v", err)
+	}
+}
+
+func TestDialRelayFallbackRejectsEmptyList(t *testing.T) {
+	_, _, err := DialRelayFallback(context.Background(), nil, "code", RoleSender, 0)
+	if !errors.Is(err, ErrAllRelaysUnreachable) {
+		t.Errorf("expected ErrAllRelaysUnreachable for an empty address list, got %v", err)
+	}
 }
 
 func TestRelayDoesNotCrossPairDifferentCodes(t *testing.T) {

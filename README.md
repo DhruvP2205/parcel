@@ -83,6 +83,19 @@ then point both `send` and `receive` at it:
 (or set `PARCEL_RELAY` instead of passing `-relay` each time). `-lan-only`
 and `-relay-only` are available if you want to force one path.
 
+`-relay` also accepts a comma-separated list (`-relay a.example.com:4321,
+b.example.com:4321`) — each address gets a short window to accept a plain
+TCP connection, and the first one that does is used; addresses that don't
+even accept a connection are skipped, not waited out. Both sides must be
+given the *same list in the same order*, since pairing only happens
+between two clients that land on the same relay process — if sender and
+receiver picked different reachable addresses from an inconsistent list,
+each would connect fine and never find the other. No address is ever
+assumed by default; leaving `-relay`/`PARCEL_RELAY` unset means no relay
+at all, only LAN discovery. If every configured address is unreachable,
+`send`/`receive` print the exact command to stand up your own relay
+instead of just failing silently.
+
 On a machine with more than one network adapter (a laptop with Wi-Fi +
 Ethernet + VPN, or a VM host with a NAT adapter alongside a host-only one),
 LAN discovery's auto-picked interface on each side can disagree, and the
