@@ -213,10 +213,12 @@ func runSend(args []string) int {
 	if *showQR {
 		printQR(code)
 	}
-	fmt.Println(ansi.Out(ansi.Cyan, fmt.Sprintf("Share it with the receiver — valid for %s. Waiting for them to connect...", transfer.SessionWindow)))
+	fmt.Println(ansi.Out(ansi.Cyan, fmt.Sprintf("Share it with the receiver — valid for %s.", transfer.SessionWindow)))
 
 	for {
+		sp := ansi.StartSpinner("Waiting for them to connect...")
 		conn, err := acceptSendConn(ctx, ln, *relayOnly, *lanOnly, relayAddrs, code)
+		sp.Stop("")
 		if err != nil {
 			if ctx.Err() != nil {
 				fmt.Fprintln(os.Stderr, ansi.Err(ansi.Red, "parcel send: timed out waiting for a receiver"))
@@ -297,10 +299,20 @@ func runReceive(args []string) int {
 			return exitRuntime
 		}
 
+		spinnerLabel := "Looking for a sender with that code..."
+		if attempt > 1 {
+			spinnerLabel = "Reconnecting..."
+		}
+		sp := ansi.StartSpinner(spinnerLabel)
 		connectCtx, cancel := context.WithTimeout(context.Background(), remaining)
 		conn, err := connectReceive(connectCtx, code, *lanOnly, *relayOnly, relayAddrs, *ifaceOverride)
 		cancel()
+		sp.Stop("")
 		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				fmt.Fprintln(os.Stderr, ansi.Err(ansi.Red, "parcel receive: timed out looking for a sender with that code"))
+				return exitRuntime
+			}
 			fmt.Fprintln(os.Stderr, ansi.Err(ansi.Red, fmt.Sprintf("parcel receive: %v", err)))
 			if errors.Is(err, discovery.ErrAllRelaysUnreachable) {
 				adviseSelfHostRelay()

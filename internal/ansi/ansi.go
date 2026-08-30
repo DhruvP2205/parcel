@@ -30,13 +30,22 @@ const (
 	HeaderStyle = Bold + Cyan
 )
 
-// StdoutEnabled and StderrEnabled are decided once at startup: is this
-// stream a real console (not redirected), and has the user not opted out
-// via NO_COLOR. isTerminal is implemented per-OS (term_windows.go /
-// term_other.go) since the stdlib has no portable isatty.
+// stdoutIsTerminal/stderrIsTerminal are computed once at startup — isTerminal
+// is implemented per-OS (term_windows.go / term_other.go) since the stdlib
+// has no portable isatty, and on Windows it also opts the console into VT
+// processing as a side effect, so it must only run once per stream.
 var (
-	StdoutEnabled = isTerminal(os.Stdout) && !noColorRequested()
-	StderrEnabled = isTerminal(os.Stderr) && !noColorRequested()
+	stdoutIsTerminal = isTerminal(os.Stdout)
+	stderrIsTerminal = isTerminal(os.Stderr)
+
+	// StdoutEnabled and StderrEnabled additionally fold in NO_COLOR — use
+	// these to decide whether to emit color codes.
+	StdoutEnabled = stdoutIsTerminal && !noColorRequested()
+	StderrEnabled = stderrIsTerminal && !noColorRequested()
+
+	// IsStdoutTerminal ignores NO_COLOR — use this to decide whether it's
+	// safe to animate (carriage-return spinners) on stdout at all.
+	IsStdoutTerminal = stdoutIsTerminal
 )
 
 func noColorRequested() bool {
