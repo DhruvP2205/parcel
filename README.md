@@ -70,7 +70,6 @@ flowchart TD
 | Sender | Receiver |
 |---|---|
 | ![Sender terminal](docs/screenshot-sender.png) | ![Receiver terminal](docs/screenshot-receiver.png) |
-| *(placeholder — drop a screenshot at `docs/screenshot-sender.png`)* | *(placeholder — drop a screenshot at `docs/screenshot-receiver.png`)* |
 
 Same flow on Windows, macOS, or Linux — `parcel` is a single binary with no install step.
 
@@ -131,7 +130,6 @@ On a laptop with more than one network connection (Wi-Fi + Ethernet + VPN), pin 
 | Relay | Sender | Receiver |
 |---|---|---|
 | ![Relay terminal](docs/screenshot-relay.png) | ![Sender via relay](docs/screenshot-relay-sender.png) | ![Receiver via relay](docs/screenshot-relay-receiver.png) |
-| *(placeholder — `docs/screenshot-relay.png`)* | *(placeholder — `docs/screenshot-relay-sender.png`)* | *(placeholder — `docs/screenshot-relay-receiver.png`)* |
 
 ### 🧵 Concurrency model
 
